@@ -1,0 +1,24 @@
+{
+  "name": "@impact-flow/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "node -e \"console.log('web: no tests yet')\""
+  },
+  "dependencies": {
+    "@impact-flow/contracts": "workspace:*",
+    "@element-plus/icons-vue": "latest",
+    "element-plus": "latest",
+    "vue": "latest"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "latest",
+    "typescript": "5.9.3",
+    "vite": "latest",
+    "vue-tsc": "latest"
+  }
+}
