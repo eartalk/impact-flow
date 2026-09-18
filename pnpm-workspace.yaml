@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - unrs-resolver
+allowBuilds:
+  '@parcel/watcher': true
+  unrs-resolver: true

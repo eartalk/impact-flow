@@ -1,0 +1,13 @@
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+.env
+.env.local
+apps/*/.env
+var/repositories/
+.local-backups/
+.playwright-cli/
+output/
+*.log
+.DS_Store

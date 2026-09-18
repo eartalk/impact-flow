@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: impact_flow
+      MYSQL_USER: impact_flow
+      MYSQL_PASSWORD: impact_flow
+      MYSQL_ROOT_PASSWORD: impact_flow_root
+    ports:
+      - "3306:3306"
+    volumes:
+      - impact-flow-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uimpact_flow", "-pimpact_flow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  impact-flow-mysql:
+
