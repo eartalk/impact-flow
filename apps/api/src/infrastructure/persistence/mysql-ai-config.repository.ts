@@ -13,6 +13,7 @@ import { DatabaseService } from './database.service';
 
 type AiConfigRow = RowDataPacket & {
   id: string;
+  workspace_id: string;
   name: string;
   base_url: string;
   api_key_encrypted: string;
@@ -32,32 +33,38 @@ type AiConfigRow = RowDataPacket & {
 export class MysqlAiConfigRepository implements AiConfigRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async findAll() {
+  async findAll(workspaceId: string) {
     const db = await this.database.connection();
     const [rows] = await db.query<AiConfigRow[]>(
-      'SELECT * FROM ai_provider_config ORDER BY is_default DESC, created_at DESC',
+      `SELECT * FROM ai_provider_config WHERE workspace_id = ?
+       ORDER BY is_default DESC, created_at DESC`,
+      [workspaceId],
     );
     return rows.map((row) => this.map(row));
   }
 
-  async findById(id: string) {
+  async findById(id: string, workspaceId: string) {
     const db = await this.database.connection();
     const [rows] = await db.query<AiConfigRow[]>(
-      'SELECT * FROM ai_provider_config WHERE id = ?',
-      [id],
+      'SELECT * FROM ai_provider_config WHERE id = ? AND workspace_id = ?',
+      [id, workspaceId],
     );
     return rows[0] ? this.map(rows[0]) : null;
   }
 
-  async findDefault() {
+  async findDefault(workspaceId: string) {
     const db = await this.database.connection();
     const [rows] = await db.query<AiConfigRow[]>(
-      'SELECT * FROM ai_provider_config WHERE is_default = 1 ORDER BY updated_at DESC LIMIT 1',
+      `SELECT * FROM ai_provider_config
+       WHERE workspace_id = ? AND is_default = 1
+       ORDER BY updated_at DESC LIMIT 1`,
+      [workspaceId],
     );
     return rows[0] ? this.map(rows[0]) : null;
   }
 
   async create(
+    workspaceId: string,
     input: Omit<CreateAiProviderConfigInput, 'apiKey'> & {
       apiKeyEncrypted: string;
       apiKeyHint: string;
@@ -69,15 +76,19 @@ export class MysqlAiConfigRepository implements AiConfigRepository {
     try {
       await connection.beginTransaction();
       if (input.isDefault) {
-        await connection.execute('UPDATE ai_provider_config SET is_default = 0');
+        await connection.execute(
+          'UPDATE ai_provider_config SET is_default = 0 WHERE workspace_id = ?',
+          [workspaceId],
+        );
       }
       await connection.execute(
         `INSERT INTO ai_provider_config
-         (id, name, base_url, api_key_encrypted, api_key_hint, model, api_format, enabled,
+         (id, workspace_id, name, base_url, api_key_encrypted, api_key_hint, model, api_format, enabled,
           is_default, timeout_ms, max_files, max_symbols)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
+          workspaceId,
           input.name,
           input.baseUrl,
           input.apiKeyEncrypted,
@@ -92,7 +103,7 @@ export class MysqlAiConfigRepository implements AiConfigRepository {
         ],
       );
       await connection.commit();
-      return (await this.findById(id))!;
+      return (await this.findById(id, workspaceId))!;
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -103,6 +114,7 @@ export class MysqlAiConfigRepository implements AiConfigRepository {
 
   async update(
     id: string,
+    workspaceId: string,
     input: Omit<UpdateAiProviderConfigInput, 'apiKey'> & {
       apiKeyEncrypted?: string;
       apiKeyHint?: string;
@@ -113,7 +125,10 @@ export class MysqlAiConfigRepository implements AiConfigRepository {
     try {
       await connection.beginTransaction();
       if (input.isDefault) {
-        await connection.execute('UPDATE ai_provider_config SET is_default = 0 WHERE id <> ?', [id]);
+        await connection.execute(
+          'UPDATE ai_provider_config SET is_default = 0 WHERE workspace_id = ? AND id <> ?',
+          [workspaceId, id],
+        );
       }
       const fields: string[] = [];
       const values: Array<string | number> = [];
@@ -142,12 +157,12 @@ export class MysqlAiConfigRepository implements AiConfigRepository {
       if (fields.length) {
         values.push(id);
         await connection.execute(
-          `UPDATE ai_provider_config SET ${fields.join(', ')} WHERE id = ?`,
-          values,
+          `UPDATE ai_provider_config SET ${fields.join(', ')} WHERE id = ? AND workspace_id = ?`,
+          [...values, workspaceId],
         );
       }
       await connection.commit();
-      return this.findById(id);
+      return this.findById(id, workspaceId);
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -156,15 +171,19 @@ export class MysqlAiConfigRepository implements AiConfigRepository {
     }
   }
 
-  async remove(id: string) {
+  async remove(id: string, workspaceId: string) {
     const db = await this.database.connection();
-    const [result] = await db.execute('DELETE FROM ai_provider_config WHERE id = ?', [id]);
+    const [result] = await db.execute(
+      'DELETE FROM ai_provider_config WHERE id = ? AND workspace_id = ?',
+      [id, workspaceId],
+    );
     return 'affectedRows' in result && result.affectedRows > 0;
   }
 
   private map(row: AiConfigRow): StoredAiProviderConfig {
     return {
       id: row.id,
+      workspaceId: row.workspace_id,
       name: row.name,
       baseUrl: row.base_url,
       apiKeyEncrypted: row.api_key_encrypted,

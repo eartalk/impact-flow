@@ -12,8 +12,8 @@ import type {
 export const ANALYSIS_REPOSITORY = Symbol('ANALYSIS_REPOSITORY');
 
 export interface AnalysisRepository {
-  findAll(): Promise<AnalysisTask[]>;
-  findById(id: string): Promise<AnalysisTask | null>;
+  findAll(workspaceId?: string): Promise<AnalysisTask[]>;
+  findById(id: string, workspaceId?: string): Promise<AnalysisTask | null>;
   findPending(): Promise<AnalysisTask[]>;
   findPendingAi(): Promise<AnalysisTask[]>;
   findActiveByProject(projectId: string): Promise<AnalysisTask | null>;

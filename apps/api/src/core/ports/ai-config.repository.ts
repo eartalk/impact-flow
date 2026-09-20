@@ -7,6 +7,7 @@ export const AI_CONFIG_REPOSITORY = Symbol('AI_CONFIG_REPOSITORY');
 
 export interface StoredAiProviderConfig {
   id: string;
+  workspaceId: string;
   name: string;
   baseUrl: string;
   model: string;
@@ -23,10 +24,11 @@ export interface StoredAiProviderConfig {
 }
 
 export interface AiConfigRepository {
-  findAll(): Promise<StoredAiProviderConfig[]>;
-  findById(id: string): Promise<StoredAiProviderConfig | null>;
-  findDefault(): Promise<StoredAiProviderConfig | null>;
+  findAll(workspaceId: string): Promise<StoredAiProviderConfig[]>;
+  findById(id: string, workspaceId: string): Promise<StoredAiProviderConfig | null>;
+  findDefault(workspaceId: string): Promise<StoredAiProviderConfig | null>;
   create(
+    workspaceId: string,
     input: Omit<CreateAiProviderConfigInput, 'apiKey'> & {
       apiKeyEncrypted: string;
       apiKeyHint: string;
@@ -34,10 +36,11 @@ export interface AiConfigRepository {
   ): Promise<StoredAiProviderConfig>;
   update(
     id: string,
+    workspaceId: string,
     input: Omit<UpdateAiProviderConfigInput, 'apiKey'> & {
       apiKeyEncrypted?: string;
       apiKeyHint?: string;
     },
   ): Promise<StoredAiProviderConfig | null>;
-  remove(id: string): Promise<boolean>;
+  remove(id: string, workspaceId: string): Promise<boolean>;
 }

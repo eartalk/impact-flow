@@ -5,6 +5,7 @@ import { ProjectsModule } from './modules/projects/projects.module';
 import { AnalysesModule } from './modules/analyses/analyses.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { AiConfigsModule } from './modules/ai-configs/ai-configs.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { AiConfigsModule } from './modules/ai-configs/ai-configs.module';
       envFilePath: ['../../.env', '.env'],
     }),
     PersistenceModule,
+    AuthModule,
     AiConfigsModule,
     ProjectsModule,
     AnalysesModule,

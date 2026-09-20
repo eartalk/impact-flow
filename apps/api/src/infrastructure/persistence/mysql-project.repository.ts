@@ -16,6 +16,7 @@ import { DatabaseService } from './database.service';
 
 type ProjectRow = RowDataPacket & {
   id: string;
+  workspace_id: string;
   name: string;
   code: string;
   repository_url: string;
@@ -56,41 +57,46 @@ type InspectionLogSummaryRow = RowDataPacket & {
 export class MysqlProjectRepository implements ProjectRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async findAll(): Promise<Project[]> {
+  async findAll(workspaceId?: string): Promise<Project[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<ProjectRow[]>(
-      'SELECT * FROM project ORDER BY created_at DESC',
+      `SELECT * FROM project ${workspaceId ? 'WHERE workspace_id = ?' : ''}
+       ORDER BY created_at DESC`,
+      workspaceId ? [workspaceId] : [],
     );
     return rows.map(this.map);
   }
 
-  async findById(id: string): Promise<Project | null> {
+  async findById(id: string, workspaceId?: string): Promise<Project | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<ProjectRow[]>(
-      'SELECT * FROM project WHERE id = ? LIMIT 1',
-      [id],
+      `SELECT * FROM project WHERE id = ?
+       ${workspaceId ? 'AND workspace_id = ?' : ''} LIMIT 1`,
+      workspaceId ? [id, workspaceId] : [id],
     );
     return rows[0] ? this.map(rows[0]) : null;
   }
 
-  async findByCode(code: string): Promise<Project | null> {
+  async findByCode(code: string, workspaceId?: string): Promise<Project | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<ProjectRow[]>(
-      'SELECT * FROM project WHERE code = ? LIMIT 1',
-      [code],
+      `SELECT * FROM project WHERE code = ?
+       ${workspaceId ? 'AND workspace_id = ?' : ''} LIMIT 1`,
+      workspaceId ? [code, workspaceId] : [code],
     );
     return rows[0] ? this.map(rows[0]) : null;
   }
 
-  async create(input: CreateProjectInput): Promise<Project> {
+  async create(workspaceId: string, input: CreateProjectInput): Promise<Project> {
     const db = await this.database.connection();
     const id = randomUUID();
     await db.execute(
       `INSERT INTO project
-       (id, name, code, repository_url, production_branch)
-       VALUES (?, ?, ?, ?, ?)`,
+       (id, workspace_id, name, code, repository_url, production_branch)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       [
         id,
+        workspaceId,
         input.name,
         input.code,
         input.repositoryUrl,
@@ -242,12 +248,16 @@ export class MysqlProjectRepository implements ProjectRepository {
     );
   }
 
-  async findInspectionLogs(query: InspectionLogQuery): Promise<InspectionLogPage> {
+  async findInspectionLogs(query: InspectionLogQuery, workspaceId?: string): Promise<InspectionLogPage> {
     const db = await this.database.connection();
     const page = Math.max(Math.trunc(query.page ?? 1), 1);
     const pageSize = Math.min(Math.max(Math.trunc(query.pageSize ?? 10), 5), 50);
     const conditions: string[] = [];
     const params: unknown[] = [];
+    if (workspaceId) {
+      conditions.push('project.workspace_id = ?');
+      params.push(workspaceId);
+    }
     if (query.projectId) {
       conditions.push('log.project_id = ?');
       params.push(query.projectId);
@@ -267,6 +277,7 @@ export class MysqlProjectRepository implements ProjectRepository {
               COALESCE(SUM(log.status = 'FAILED'), 0) AS failed,
               COALESCE(SUM(log.status = 'RUNNING'), 0) AS running
        FROM project_inspection_log log
+       INNER JOIN project ON project.id = log.project_id
        ${where}`,
       params,
     );
@@ -328,6 +339,7 @@ export class MysqlProjectRepository implements ProjectRepository {
       : [];
     return {
       id: row.id,
+      workspaceId: row.workspace_id,
       name: row.name,
       code: row.code,
       repositoryUrl: row.repository_url,

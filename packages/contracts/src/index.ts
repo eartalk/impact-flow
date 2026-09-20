@@ -91,6 +91,24 @@ export interface AiProviderConnectionTest {
   checkedAt: string;
 }
 
+export interface PendingNotificationConfig {
+  enabled: boolean;
+  webhookConfigured: boolean;
+  webhookMasked: string | null;
+  updatedAt: string | null;
+}
+
+export interface UpdatePendingNotificationConfigInput {
+  enabled: boolean;
+  dingTalkWebhook?: string;
+}
+
+export interface PendingNotificationConnectionTest {
+  success: boolean;
+  message: string;
+  checkedAt: string;
+}
+
 export type CodeSymbolKind =
   | 'CLASS'
   | 'METHOD'
@@ -153,6 +171,7 @@ export interface CommitSummary {
 
 export interface Project {
   id: string;
+  workspaceId: string;
   name: string;
   code: string;
   repositoryUrl: string;
@@ -292,3 +311,56 @@ export interface CreateProjectInput {
 }
 
 export type UpdateProjectInput = Partial<CreateProjectInput>;
+
+export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+  status: 'ACTIVE' | 'DISABLED';
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  code: string;
+  role: WorkspaceRole;
+}
+
+export interface AuthSession {
+  user: AuthUser;
+  workspace: WorkspaceSummary;
+}
+
+export interface BootstrapStatus {
+  required: boolean;
+}
+
+export interface BootstrapInput {
+  username: string;
+  password: string;
+  displayName: string;
+  workspaceName: string;
+}
+
+export interface LoginInput {
+  username: string;
+  password: string;
+}
+
+export interface WorkspaceMember {
+  userId: string;
+  username: string;
+  displayName: string;
+  status: AuthUser['status'];
+  role: WorkspaceRole;
+  joinedAt: string;
+}
+
+export interface CreateWorkspaceMemberInput {
+  username: string;
+  password: string;
+  displayName: string;
+  role: Exclude<WorkspaceRole, 'OWNER'>;
+}

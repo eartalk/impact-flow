@@ -11,10 +11,10 @@ import type {
 export const PROJECT_REPOSITORY = Symbol('PROJECT_REPOSITORY');
 
 export interface ProjectRepository {
-  findAll(): Promise<Project[]>;
-  findById(id: string): Promise<Project | null>;
-  findByCode(code: string): Promise<Project | null>;
-  create(input: CreateProjectInput): Promise<Project>;
+  findAll(workspaceId?: string): Promise<Project[]>;
+  findById(id: string, workspaceId?: string): Promise<Project | null>;
+  findByCode(code: string, workspaceId?: string): Promise<Project | null>;
+  create(workspaceId: string, input: CreateProjectInput): Promise<Project>;
   update(id: string, input: UpdateProjectInput): Promise<Project>;
   remove(id: string): Promise<void>;
   updateLastAnalyzedCommit(id: string, commit: string): Promise<void>;
@@ -37,6 +37,6 @@ export interface ProjectRepository {
     input: { detectedCommit: string; pendingCommitCount: number },
   ): Promise<void>;
   failInspectionLog(id: string, errorMessage: string): Promise<void>;
-  findInspectionLogs(query: InspectionLogQuery): Promise<InspectionLogPage>;
+  findInspectionLogs(query: InspectionLogQuery, workspaceId?: string): Promise<InspectionLogPage>;
   cleanupInspectionLogs(olderThan: Date): Promise<number>;
 }

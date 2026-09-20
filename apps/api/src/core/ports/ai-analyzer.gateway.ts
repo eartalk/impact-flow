@@ -14,6 +14,7 @@ import type {
 export const AI_ANALYZER_GATEWAY = Symbol('AI_ANALYZER_GATEWAY');
 
 export interface AiAnalysisInput {
+  workspaceId: string;
   projectName: string;
   baseCommit: string;
   targetCommit: string;

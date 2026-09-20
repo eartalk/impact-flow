@@ -3,6 +3,7 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { CreateProjectInput } from '@impact-flow/contracts';
@@ -15,9 +16,11 @@ import {
   type ProjectRepository,
 } from '../../core/ports/project.repository';
 import { GIT_GATEWAY, type GitGateway } from '../../core/ports/git.gateway';
+import { PendingNotificationsService } from '../pending-notifications/pending-notifications.service';
 
 @Injectable()
 export class ProjectsService {
+  private readonly logger = new Logger(ProjectsService.name);
   private readonly inspections = new Map<string, Promise<Project>>();
 
   constructor(
@@ -25,14 +28,15 @@ export class ProjectsService {
     private readonly projects: ProjectRepository,
     @Inject(GIT_GATEWAY)
     private readonly git: GitGateway,
+    private readonly notifications: PendingNotificationsService,
   ) {}
 
-  list() {
-    return this.projects.findAll();
+  list(workspaceId?: string) {
+    return this.projects.findAll(workspaceId);
   }
 
-  listInspectionLogs(query: InspectionLogQuery) {
-    return this.projects.findInspectionLogs(query);
+  listInspectionLogs(query: InspectionLogQuery, workspaceId?: string) {
+    return this.projects.findInspectionLogs(query, workspaceId);
   }
 
   cleanupInspectionLogs(retentionDays: number) {
@@ -41,8 +45,8 @@ export class ProjectsService {
     return this.projects.cleanupInspectionLogs(olderThan);
   }
 
-  async testConnection(id: string) {
-    const project = await this.projects.findById(id);
+  async testConnection(id: string, workspaceId?: string) {
+    const project = await this.projects.findById(id, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
     try {
@@ -69,19 +73,19 @@ export class ProjectsService {
     }
   }
 
-  async create(input: CreateProjectInput) {
-    if (await this.projects.findByCode(input.code)) {
+  async create(workspaceId: string, input: CreateProjectInput) {
+    if (await this.projects.findByCode(input.code, workspaceId)) {
       throw new BadRequestException(`项目编码 ${input.code} 已存在`);
     }
-    return this.projects.create(input);
+    return this.projects.create(workspaceId, input);
   }
 
-  async update(id: string, input: UpdateProjectInput) {
-    const project = await this.projects.findById(id);
+  async update(id: string, input: UpdateProjectInput, workspaceId?: string) {
+    const project = await this.projects.findById(id, workspaceId);
     if (!project) throw new NotFoundException('服务不存在');
 
     if (input.code && input.code !== project.code) {
-      const duplicate = await this.projects.findByCode(input.code);
+      const duplicate = await this.projects.findByCode(input.code, workspaceId);
       if (duplicate && duplicate.id !== id) {
         throw new BadRequestException(`服务编码 ${input.code} 已存在`);
       }
@@ -89,8 +93,8 @@ export class ProjectsService {
     return this.projects.update(id, input);
   }
 
-  async remove(id: string) {
-    if (!(await this.projects.findById(id))) {
+  async remove(id: string, workspaceId?: string) {
+    if (!(await this.projects.findById(id, workspaceId))) {
       throw new NotFoundException('服务不存在');
     }
     try {
@@ -105,8 +109,8 @@ export class ProjectsService {
     }
   }
 
-  async detectVersion(id: string) {
-    const project = await this.projects.findById(id);
+  async detectVersion(id: string, workspaceId?: string) {
+    const project = await this.projects.findById(id, workspaceId);
     if (!project) {
       throw new NotFoundException('项目不存在');
     }
@@ -130,29 +134,31 @@ export class ProjectsService {
   async inspectVersion(
     id: string,
     triggerType: InspectionTrigger = 'MANUAL',
+    workspaceId?: string,
   ): Promise<Project> {
     const running = this.inspections.get(id);
     if (running) return running;
 
-    const inspection = this.runInspection(id, triggerType).finally(() => {
+    const inspection = this.runInspection(id, triggerType, workspaceId).finally(() => {
       this.inspections.delete(id);
     });
     this.inspections.set(id, inspection);
     return inspection;
   }
 
-  async inspectAll(triggerType: InspectionTrigger = 'MANUAL') {
-    const projects = await this.projects.findAll();
+  async inspectAll(triggerType: InspectionTrigger = 'MANUAL', workspaceId?: string) {
+    const projects = await this.projects.findAll(workspaceId);
     return Promise.all(
-      projects.map((project) => this.inspectVersion(project.id, triggerType)),
+      projects.map((project) => this.inspectVersion(project.id, triggerType, workspaceId)),
     );
   }
 
   private async runInspection(
     id: string,
     triggerType: InspectionTrigger,
+    workspaceId?: string,
   ): Promise<Project> {
-    const project = await this.projects.findById(id);
+    const project = await this.projects.findById(id, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
     const logId = await this.projects.createInspectionLog(id, triggerType);
@@ -185,6 +191,22 @@ export class ProjectsService {
         detectedCommit: version.targetCommit,
         pendingCommitCount: pendingCommits.length,
       });
+      try {
+        await this.notifications.notifyIfNeeded({
+          project: result,
+          baseCommit: version.baseCommit,
+          targetCommit: version.targetCommit,
+          commits: pendingCommits,
+        });
+      } catch (notificationError) {
+        const notificationMessage =
+          notificationError instanceof Error
+            ? notificationError.message
+            : String(notificationError);
+        this.logger.warn(
+          '待检测通知发送失败（' + project.code + '）：' + notificationMessage,
+        );
+      }
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

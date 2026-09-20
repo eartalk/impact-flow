@@ -9,6 +9,13 @@ import type {
 } from '@impact-flow/contracts';
 import type { ProjectRepository } from '../../core/ports/project.repository';
 import { ProjectsService } from './projects.service';
+import type { PendingNotificationsService } from '../pending-notifications/pending-notifications.service';
+
+function notificationService() {
+  return {
+    notifyIfNeeded: jest.fn().mockResolvedValue(false),
+  } as unknown as PendingNotificationsService;
+}
 
 class FakeProjectRepository implements ProjectRepository {
   private projects: Project[] = [];
@@ -21,9 +28,10 @@ class FakeProjectRepository implements ProjectRepository {
   async findByCode(code: string) {
     return this.projects.find((project) => project.code === code) ?? null;
   }
-  async create(input: CreateProjectInput) {
+  async create(workspaceId: string, input: CreateProjectInput) {
     const project: Project = {
       id: 'project-1',
+      workspaceId,
       ...input,
       lastAnalyzedCommit: null,
       detectedCommit: null,
@@ -142,8 +150,8 @@ describe('ProjectsService', () => {
       listCommits: jest.fn(),
       analyzeRange: jest.fn(),
     };
-    const service = new ProjectsService(repository, git);
-    const project = await service.create({
+    const service = new ProjectsService(repository, git, notificationService());
+    const project = await service.create('workspace-1', {
       name: '工地服务',
       code: 'worksite-service',
       repositoryUrl: 'git@example.com:delivery/worksite.git',
@@ -173,8 +181,8 @@ describe('ProjectsService', () => {
       listCommits: jest.fn().mockResolvedValue([]),
       analyzeRange: jest.fn(),
     };
-    const service = new ProjectsService(repository, git);
-    const project = await service.create({
+    const service = new ProjectsService(repository, git, notificationService());
+    const project = await service.create('workspace-1', {
       name: '工地服务',
       code: 'worksite-service',
       repositoryUrl: 'git@example.com:delivery/worksite.git',
@@ -210,8 +218,9 @@ describe('ProjectsService', () => {
       ]),
       analyzeRange: jest.fn(),
     };
-    const service = new ProjectsService(repository, git);
-    const project = await service.create({
+    const notifications = notificationService();
+    const service = new ProjectsService(repository, git, notifications);
+    const project = await service.create('workspace-1', {
       name: '工地服务',
       code: 'worksite-service',
       repositoryUrl: 'git@example.com:delivery/worksite.git',
@@ -226,6 +235,14 @@ describe('ProjectsService', () => {
     expect(result.pendingCommitCount).toBe(1);
     expect((await repository.findInspectionLogs()).items[0]).toEqual(
       expect.objectContaining({ status: 'SUCCESS', triggerType: 'MANUAL' }),
+    );
+    expect(notifications.notifyIfNeeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: expect.objectContaining({ id: project.id }),
+        baseCommit: 'abc123',
+        targetCommit: 'def456',
+        commits: expect.any(Array),
+      }),
     );
   });
 });

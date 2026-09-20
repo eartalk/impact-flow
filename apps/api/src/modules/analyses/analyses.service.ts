@@ -58,22 +58,25 @@ export class AnalysesService implements OnApplicationBootstrap {
     }
   }
 
-  list() {
-    return this.analyses.findAll();
+  list(workspaceId?: string) {
+    return this.analyses.findAll(workspaceId);
   }
 
-  listLogs(query: import('@impact-flow/contracts').AnalysisLogQuery) {
+  async listLogs(query: import('@impact-flow/contracts').AnalysisLogQuery, workspaceId?: string) {
+    if (workspaceId && !(await this.projects.findById(query.projectId, workspaceId))) {
+      throw new NotFoundException('项目不存在');
+    }
     return this.analyses.listLogs(query);
   }
 
-  async get(id: string) {
-    const task = await this.analyses.findById(id);
+  async get(id: string, workspaceId?: string) {
+    const task = await this.analyses.findById(id, workspaceId);
     if (!task) throw new NotFoundException('分析任务不存在');
     return task;
   }
 
-  async create(projectId: string) {
-    const project = await this.projects.findById(projectId);
+  async create(projectId: string, workspaceId?: string) {
+    const project = await this.projects.findById(projectId, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
     const activeTask = await this.analyses.findActiveByProject(projectId);
@@ -113,11 +116,11 @@ export class AnalysesService implements OnApplicationBootstrap {
     return task;
   }
 
-  async rerun(id: string) {
-    const source = await this.analyses.findById(id);
+  async rerun(id: string, workspaceId?: string) {
+    const source = await this.analyses.findById(id, workspaceId);
     if (!source) throw new NotFoundException('分析任务不存在');
 
-    const project = await this.projects.findById(source.projectId);
+    const project = await this.projects.findById(source.projectId, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
     const activeTask = await this.analyses.findActiveByProject(source.projectId);
@@ -149,8 +152,8 @@ export class AnalysesService implements OnApplicationBootstrap {
     return task;
   }
 
-  async analyzeWithAi(id: string) {
-    const task = await this.analyses.findById(id);
+  async analyzeWithAi(id: string, workspaceId?: string) {
+    const task = await this.analyses.findById(id, workspaceId);
     if (!task) throw new NotFoundException('分析任务不存在');
     if (task.status !== 'SUCCESS') {
       throw new BadRequestException('请先完成变更分析，再执行 AI 分析');
@@ -267,6 +270,7 @@ export class AnalysesService implements OnApplicationBootstrap {
 
     try {
       const result = await this.aiAnalyzer.analyze({
+        workspaceId: project.workspaceId,
         projectName: project.name,
         baseCommit: task.baseCommit,
         targetCommit: task.targetCommit,

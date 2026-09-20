@@ -17,7 +17,7 @@ export class SecretCipher {
   decrypt(value: string) {
     const [version, iv, tag, encrypted] = value.split(':');
     if (version !== 'v1' || !iv || !tag || !encrypted) {
-      throw new Error('无法识别已保存的 AI API Key');
+      throw new Error('无法识别已保存的敏感配置');
     }
     const decipher = createDecipheriv('aes-256-gcm', this.key(), Buffer.from(iv, 'base64'));
     decipher.setAuthTag(Buffer.from(tag, 'base64'));
@@ -31,7 +31,7 @@ export class SecretCipher {
     const material = this.config.get<string>('AI_CONFIG_ENCRYPTION_KEY')
       || this.config.get<string>('DATABASE_PASSWORD_BASE64');
     if (!material) {
-      throw new Error('请配置 AI_CONFIG_ENCRYPTION_KEY 后再保存 AI API Key');
+      throw new Error('请配置 AI_CONFIG_ENCRYPTION_KEY 后再保存敏感配置');
     }
     return createHash('sha256').update(material).digest();
   }

@@ -221,6 +221,7 @@ function createAdapter(
 
 function input(): AiAnalysisInput {
   return {
+    workspaceId: 'workspace-1',
     projectName: 'Users API',
     baseCommit: 'base',
     targetCommit: 'target',

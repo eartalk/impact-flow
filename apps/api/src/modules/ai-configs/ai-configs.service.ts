@@ -24,6 +24,7 @@ import { SecretCipher } from '../../infrastructure/security/secret-cipher';
 
 @Injectable()
 export class AiConfigsService implements OnApplicationBootstrap {
+  private readonly defaultWorkspaceId = '00000000-0000-0000-0000-000000000001';
   constructor(
     @Inject(AI_CONFIG_REPOSITORY)
     private readonly repository: AiConfigRepository,
@@ -34,11 +35,11 @@ export class AiConfigsService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    if ((await this.repository.findAll()).length) return;
+    if ((await this.repository.findAll(this.defaultWorkspaceId)).length) return;
     const apiKey = this.config.get<string>('AI_API_KEY')?.trim();
     const model = this.config.get<string>('AI_MODEL')?.trim();
     if (!apiKey || !model) return;
-    await this.create({
+    await this.create(this.defaultWorkspaceId, {
       name: '环境变量配置',
       baseUrl: this.config.get<string>('AI_API_BASE_URL') ?? 'https://api.openai.com/v1',
       apiKey,
@@ -55,13 +56,13 @@ export class AiConfigsService implements OnApplicationBootstrap {
     });
   }
 
-  async list() {
-    return (await this.repository.findAll()).map((item) => this.publicConfig(item));
+  async list(workspaceId: string) {
+    return (await this.repository.findAll(workspaceId)).map((item) => this.publicConfig(item));
   }
 
-  async create(input: CreateAiProviderConfigInput) {
+  async create(workspaceId: string, input: CreateAiProviderConfigInput) {
     const apiKey = input.apiKey.trim();
-    const saved = await this.repository.create({
+    const saved = await this.repository.create(workspaceId, {
       ...input,
       name: input.name.trim(),
       baseUrl: this.normalizeBaseUrl(input.baseUrl),
@@ -72,11 +73,11 @@ export class AiConfigsService implements OnApplicationBootstrap {
     return this.publicConfig(saved);
   }
 
-  async update(id: string, input: UpdateAiProviderConfigInput) {
-    const existing = await this.repository.findById(id);
+  async update(id: string, workspaceId: string, input: UpdateAiProviderConfigInput) {
+    const existing = await this.repository.findById(id, workspaceId);
     if (!existing) throw new NotFoundException('AI 配置不存在');
     const apiKey = input.apiKey?.trim();
-    const saved = await this.repository.update(id, {
+    const saved = await this.repository.update(id, workspaceId, {
       ...input,
       name: input.name?.trim(),
       baseUrl: input.baseUrl ? this.normalizeBaseUrl(input.baseUrl) : undefined,
@@ -87,13 +88,13 @@ export class AiConfigsService implements OnApplicationBootstrap {
     return this.publicConfig(saved!);
   }
 
-  async remove(id: string) {
-    if (!(await this.repository.remove(id))) throw new NotFoundException('AI 配置不存在');
+  async remove(id: string, workspaceId: string) {
+    if (!(await this.repository.remove(id, workspaceId))) throw new NotFoundException('AI 配置不存在');
     return { deleted: true };
   }
 
-  async test(id: string) {
-    const saved = await this.repository.findById(id);
+  async test(id: string, workspaceId: string) {
+    const saved = await this.repository.findById(id, workspaceId);
     if (!saved) throw new NotFoundException('AI 配置不存在');
     try {
       return await this.analyzer.testConnection({

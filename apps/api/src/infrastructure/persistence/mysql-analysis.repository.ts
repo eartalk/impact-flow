@@ -72,19 +72,22 @@ type CountRow = RowDataPacket & { total: number };
 export class MysqlAnalysisRepository implements AnalysisRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async findAll(): Promise<AnalysisTask[]> {
+  async findAll(workspaceId?: string): Promise<AnalysisTask[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
-      `${this.baseSelect()} ORDER BY a.created_at DESC`,
+      `${this.baseSelect()} ${workspaceId ? 'WHERE p.workspace_id = ?' : ''}
+       ORDER BY a.created_at DESC`,
+      workspaceId ? [workspaceId] : [],
     );
     return rows.map((row) => this.map(row));
   }
 
-  async findById(id: string): Promise<AnalysisTask | null> {
+  async findById(id: string, workspaceId?: string): Promise<AnalysisTask | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
-      `${this.baseSelect()} WHERE a.id = ?`,
-      [id],
+      `${this.baseSelect()} WHERE a.id = ?
+       ${workspaceId ? 'AND p.workspace_id = ?' : ''}`,
+      workspaceId ? [id, workspaceId] : [id],
     );
     if (!rows[0]) return null;
 

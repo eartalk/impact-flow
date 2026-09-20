@@ -53,7 +53,7 @@ export class OpenAiCompatibleAnalysisAdapter implements AiAnalyzerGateway {
   ) {}
 
   async analyze(input: AiAnalysisInput): Promise<AiAnalysisResult> {
-    const settings = await this.activeSettings();
+    const settings = await this.activeSettings(input.workspaceId);
     if (!settings) return this.disabledResult();
     const { model, maxFiles, maxSymbols } = settings;
     const response = await this.requestModel(
@@ -363,8 +363,8 @@ export class OpenAiCompatibleAnalysisAdapter implements AiAnalyzerGateway {
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
   }
 
-  private async activeSettings() {
-    const saved = await this.configurations.findDefault();
+  private async activeSettings(workspaceId: string) {
+    const saved = await this.configurations.findDefault(workspaceId);
     if (saved) {
       if (!saved.enabled) return null;
       return {
