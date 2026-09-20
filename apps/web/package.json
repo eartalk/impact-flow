@@ -10,8 +10,9 @@
     "test": "node -e \"console.log('web: no tests yet')\""
   },
   "dependencies": {
-    "@impact-flow/contracts": "workspace:*",
     "@element-plus/icons-vue": "latest",
+    "@impact-flow/contracts": "workspace:*",
+    "@vue/shared": "3.5.42",
     "element-plus": "latest",
     "vue": "latest"
   },
