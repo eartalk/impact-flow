@@ -5,6 +5,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import simpleGit from 'simple-git';
 import type { GitGateway } from '../../core/ports/git.gateway';
 import type {
+  ChangeEvidence,
   ChangedFile,
   CommitSummary,
   FileChangeType,
@@ -67,7 +68,7 @@ export class SimpleGitGateway implements GitGateway {
     targetCommit: string;
   }) {
     const git = await this.prepareRepository(input);
-    const [commitOutput, nameStatusOutput, numStatOutput] = await Promise.all([
+    const [commitOutput, nameStatusOutput, numStatOutput, patchOutput] = await Promise.all([
       git.raw([
         'log',
         '--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s',
@@ -87,6 +88,15 @@ export class SimpleGitGateway implements GitGateway {
         input.baseCommit,
         input.targetCommit,
       ]),
+      git.raw([
+        'diff',
+        '--no-color',
+        '--no-ext-diff',
+        '--unified=3',
+        '-M',
+        input.baseCommit,
+        input.targetCommit,
+      ]),
     ]);
 
     const commits = this.parseCommits(commitOutput);
@@ -96,6 +106,7 @@ export class SimpleGitGateway implements GitGateway {
     return {
       commits,
       files,
+      changeEvidence: this.parseChangeEvidence(patchOutput, files),
       additions: files.reduce((sum, file) => sum + file.additions, 0),
       deletions: files.reduce((sum, file) => sum + file.deletions, 0),
     };
@@ -204,6 +215,87 @@ export class SimpleGitGateway implements GitGateway {
       });
     }
     return result;
+  }
+
+  private parseChangeEvidence(
+    output: string,
+    files: ChangedFile[],
+  ): ChangeEvidence[] {
+    const maxFiles = 24;
+    const maxFileCharacters = 5_000;
+    const maxTotalCharacters = 40_000;
+    const fileByPath = new Map(
+      files.flatMap((file) => [
+        [file.path, file] as const,
+        ...(file.oldPath ? [[file.oldPath, file] as const] : []),
+      ]),
+    );
+    const evidence: ChangeEvidence[] = [];
+    let totalCharacters = 0;
+
+    for (const section of output.split(/(?=^diff --git )/m)) {
+      if (!section.startsWith('diff --git ') || evidence.length >= maxFiles) continue;
+      const newPath = this.patchPath(section.match(/^\+\+\+\s+(.+)$/m)?.[1]);
+      const oldPath = this.patchPath(section.match(/^---\s+(.+)$/m)?.[1]);
+      const file = (newPath && fileByPath.get(newPath))
+        || (oldPath && fileByPath.get(oldPath));
+      if (!file || this.isSensitiveOrGenerated(file.path)) continue;
+      if (/^Binary files /m.test(section)) continue;
+
+      const lines = section
+        .split(/\r?\n/)
+        .filter((line) =>
+          line.startsWith('@@')
+          || (line.startsWith('+') && !line.startsWith('+++'))
+          || (line.startsWith('-') && !line.startsWith('---'))
+          || line.startsWith(' '),
+        )
+        .map((line) => this.redactSensitiveValue(line));
+      if (!lines.some((line) => line.startsWith('@@'))) continue;
+
+      const available = Math.min(
+        maxFileCharacters,
+        maxTotalCharacters - totalCharacters,
+      );
+      if (available <= 0) break;
+      const fullPatch = lines.join('\n').trim();
+      const patch = fullPatch.slice(0, available);
+      evidence.push({
+        filePath: file.path,
+        oldPath: file.oldPath,
+        changeType: file.changeType,
+        patch,
+        truncated: patch.length < fullPatch.length,
+      });
+      totalCharacters += patch.length;
+    }
+    return evidence;
+  }
+
+  private patchPath(raw: string | undefined) {
+    if (!raw || raw === '/dev/null') return null;
+    const normalized = raw.trim().replace(/^"|"$/g, '');
+    return normalized.replace(/^[ab]\//, '');
+  }
+
+  private isSensitiveOrGenerated(path: string) {
+    const normalized = path.toLowerCase().replace(/\\/g, '/');
+    const name = normalized.split('/').at(-1) ?? normalized;
+    return (
+      /(^|\/)\.(env|git|idea|vscode)(\/|$)/.test(normalized)
+      || /(^|\/)(dist|build|coverage|vendor|node_modules)(\/|$)/.test(normalized)
+      || /\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|7z|jar|class|dll|exe|pfx|p12|pem|key)$/i.test(name)
+      || /(^|[-_.])(secret|credentials?)([-_.]|$)/i.test(name)
+      || /(^|\.)lock$/.test(name)
+      || ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock'].includes(name)
+    );
+  }
+
+  private redactSensitiveValue(line: string) {
+    return line.replace(
+      /((?:api[_-]?key|secret|password|access[_-]?token|private[_-]?key)\s*[:=]\s*)([^\s,;]+)/gi,
+      '$1[REDACTED]',
+    );
   }
 
   private async exists(path: string) {
