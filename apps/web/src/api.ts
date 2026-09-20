@@ -9,16 +9,26 @@ import type {
   InspectionLog,
   InspectionLogPage,
   InspectionLogQuery,
+  PendingNotificationConfig,
+  PendingNotificationConnectionTest,
   Project,
   RepositoryConnectionTest,
   UpdateProjectInput,
   UpdateAiProviderConfigInput,
+  UpdatePendingNotificationConfigInput,
   VersionDetection,
+  AuthSession,
+  BootstrapInput,
+  BootstrapStatus,
+  CreateWorkspaceMemberInput,
+  LoginInput,
+  WorkspaceMember,
 } from '@impact-flow/contracts';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...init?.headers,
@@ -37,6 +47,27 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getBootstrapStatus: () =>
+    request<BootstrapStatus>('/api/auth/bootstrap-status'),
+  bootstrap: (input: BootstrapInput) =>
+    request<AuthSession>('/api/auth/bootstrap', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  login: (input: LoginInput) =>
+    request<AuthSession>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  logout: () =>
+    request<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
+  getCurrentSession: () => request<AuthSession>('/api/auth/me'),
+  listMembers: () => request<WorkspaceMember[]>('/api/members'),
+  createMember: (input: CreateWorkspaceMemberInput) =>
+    request<WorkspaceMember>('/api/members', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   listProjects: () => request<Project[]>('/api/projects'),
   createProject: (input: CreateProjectInput) =>
     request<Project>('/api/projects', {
@@ -113,4 +144,18 @@ export const api = {
     request<{ deleted: boolean }>(`/api/ai-configs/${id}`, { method: 'DELETE' }),
   testAiConfig: (id: string) =>
     request<AiProviderConnectionTest>(`/api/ai-configs/${id}/test`, { method: 'POST' }),
+  getPendingNotificationConfig: () =>
+    request<PendingNotificationConfig>('/api/pending-notification-config'),
+  updatePendingNotificationConfig: (
+    input: UpdatePendingNotificationConfigInput,
+  ) =>
+    request<PendingNotificationConfig>('/api/pending-notification-config', {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  testPendingNotification: () =>
+    request<PendingNotificationConnectionTest>(
+      '/api/pending-notification-config/test',
+      { method: 'POST' },
+    ),
 };

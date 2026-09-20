@@ -13,6 +13,7 @@ import {
   Refresh,
   Setting,
   Tickets,
+  User,
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type {
@@ -26,8 +27,12 @@ import type {
   CreateAiProviderConfigInput,
   InspectionLog,
   InspectionLogQuery,
+  PendingNotificationConfig,
   Project,
   RepositoryConnectionTest,
+  AuthSession,
+  CreateWorkspaceMemberInput,
+  WorkspaceMember,
 } from "@impact-flow/contracts";
 import { api } from "./api";
 
@@ -35,7 +40,7 @@ const projects = ref<Project[]>([]);
 const analyses = ref<AnalysisTask[]>([]);
 const loading = ref(false);
 const dialogVisible = ref(false);
-const activeView = ref<"analysis" | "services" | "ai-config">("analysis");
+const activeView = ref<"analysis" | "services" | "base-config">("analysis");
 const editingProjectId = ref<string | null>(null);
 const savingProject = ref(false);
 const detectingProjectId = ref<string | null>(null);
@@ -74,6 +79,18 @@ const editingAiConfigId = ref<string | null>(null);
 const savingAiConfig = ref(false);
 const testingAiConfigId = ref<string | null>(null);
 const aiConnectionResults = ref<Record<string, AiProviderConnectionTest>>({});
+const pendingNotificationConfig = ref<PendingNotificationConfig | null>(null);
+const pendingNotificationLoading = ref(false);
+const savingPendingNotification = ref(false);
+const testingPendingNotification = ref(false);
+const authLoading = ref(true);
+const authSubmitting = ref(false);
+const bootstrapRequired = ref(false);
+const currentSession = ref<AuthSession | null>(null);
+const membersVisible = ref(false);
+const membersLoading = ref(false);
+const members = ref<WorkspaceMember[]>([]);
+const memberCreating = ref(false);
 let projectRefreshTimer: ReturnType<typeof setInterval> | undefined;
 let analysisPollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -96,6 +113,149 @@ const aiForm = reactive<CreateAiProviderConfigInput>({
   maxFiles: 80,
   maxSymbols: 50,
 });
+
+const pendingNotificationForm = reactive({
+  enabled: false,
+  dingTalkWebhook: "",
+});
+
+const loginForm = reactive({ username: "", password: "" });
+const bootstrapForm = reactive({
+  username: "admin",
+  password: "",
+  displayName: "系统管理员",
+  workspaceName: "Impact Flow 团队",
+});
+const memberForm = reactive<CreateWorkspaceMemberInput>({
+  username: "",
+  password: "",
+  displayName: "",
+  role: "MEMBER",
+});
+
+const canManageMembers = computed(() =>
+  ["OWNER", "ADMIN"].includes(currentSession.value?.workspace.role ?? ""),
+);
+const memberFormValid = computed(() =>
+  memberForm.displayName.trim().length > 0 &&
+  /^[a-zA-Z0-9_.@-]{3,100}$/.test(memberForm.username.trim()) &&
+  memberForm.password.length >= 8,
+);
+
+function startBackgroundTasks() {
+  if (!projectRefreshTimer) {
+    projectRefreshTimer = setInterval(async () => {
+      try {
+        projects.value = await api.listProjects();
+      } catch {
+        // 后台静默刷新失败时保留当前页面数据。
+      }
+    }, 30_000);
+  }
+  if (!analysisPollTimer) {
+    analysisPollTimer = setInterval(() => void pollActiveAnalyses(), 2_000);
+  }
+}
+
+function stopBackgroundTasks() {
+  if (projectRefreshTimer) clearInterval(projectRefreshTimer);
+  if (analysisPollTimer) clearInterval(analysisPollTimer);
+  projectRefreshTimer = undefined;
+  analysisPollTimer = undefined;
+}
+
+async function initializeAuth() {
+  authLoading.value = true;
+  try {
+    const status = await api.getBootstrapStatus();
+    bootstrapRequired.value = status.required;
+    if (!status.required) {
+      try {
+        currentSession.value = await api.getCurrentSession();
+        await loadData();
+        startBackgroundTasks();
+      } catch {
+        currentSession.value = null;
+      }
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "认证服务不可用");
+  } finally {
+    authLoading.value = false;
+  }
+}
+
+async function submitAuth() {
+  authSubmitting.value = true;
+  try {
+    currentSession.value = bootstrapRequired.value
+      ? await api.bootstrap(bootstrapForm)
+      : await api.login(loginForm);
+    bootstrapRequired.value = false;
+    loginForm.password = "";
+    bootstrapForm.password = "";
+    await loadData();
+    startBackgroundTasks();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "登录失败");
+  } finally {
+    authSubmitting.value = false;
+  }
+}
+
+async function logout() {
+  try {
+    await api.logout();
+  } finally {
+    stopBackgroundTasks();
+    currentSession.value = null;
+    projects.value = [];
+    analyses.value = [];
+  }
+}
+
+async function openMembers() {
+  membersVisible.value = true;
+  membersLoading.value = true;
+  try {
+    members.value = await api.listMembers();
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "成员加载失败");
+  } finally {
+    membersLoading.value = false;
+  }
+}
+
+async function createMember() {
+  if (!memberForm.displayName.trim()) {
+    ElMessage.warning("请填写成员显示名称");
+    return;
+  }
+  if (!/^[a-zA-Z0-9_.@-]{3,100}$/.test(memberForm.username.trim())) {
+    ElMessage.warning("登录账号至少 3 位，只能使用字母、数字及 . _ @ -");
+    return;
+  }
+  if (memberForm.password.length < 8) {
+    ElMessage.warning("成员初始密码至少需要 8 个字符");
+    return;
+  }
+  memberCreating.value = true;
+  try {
+    await api.createMember(memberForm);
+    members.value = await api.listMembers();
+    Object.assign(memberForm, {
+      username: "",
+      password: "",
+      displayName: "",
+      role: "MEMBER",
+    });
+    ElMessage.success("成员已创建");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "成员创建失败");
+  } finally {
+    memberCreating.value = false;
+  }
+}
 
 const latestAnalysisByProject = computed(() => {
   const result = new Map<string, AnalysisTask>();
@@ -133,9 +293,57 @@ async function loadAiConfigs() {
   }
 }
 
-function openAiConfigView() {
-  activeView.value = "ai-config";
-  void loadAiConfigs();
+async function loadPendingNotificationConfig() {
+  pendingNotificationLoading.value = true;
+  try {
+    const config = await api.getPendingNotificationConfig();
+    pendingNotificationConfig.value = config;
+    pendingNotificationForm.enabled = config.enabled;
+    pendingNotificationForm.dingTalkWebhook = "";
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  } finally {
+    pendingNotificationLoading.value = false;
+  }
+}
+
+function openBaseConfigView() {
+  activeView.value = "base-config";
+  void Promise.all([loadAiConfigs(), loadPendingNotificationConfig()]);
+}
+
+async function savePendingNotificationConfig() {
+  savingPendingNotification.value = true;
+  try {
+    const webhook = pendingNotificationForm.dingTalkWebhook.trim();
+    const config = await api.updatePendingNotificationConfig({
+      enabled: pendingNotificationForm.enabled,
+      ...(webhook ? { dingTalkWebhook: webhook } : {}),
+    });
+    pendingNotificationConfig.value = config;
+    pendingNotificationForm.dingTalkWebhook = "";
+    ElMessage.success("待检测通知配置已保存");
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  } finally {
+    savingPendingNotification.value = false;
+  }
+}
+
+async function testPendingNotification() {
+  if (pendingNotificationForm.dingTalkWebhook.trim()) {
+    ElMessage.warning("Webhook 有修改，请先保存后再测试");
+    return;
+  }
+  testingPendingNotification.value = true;
+  try {
+    const result = await api.testPendingNotification();
+    ElMessage.success(result.message);
+  } catch (error) {
+    ElMessage.error((error as Error).message);
+  } finally {
+    testingPendingNotification.value = false;
+  }
 }
 
 function resetAiForm() {
@@ -781,26 +989,81 @@ async function pollActiveAnalyses() {
   }
 }
 
-onMounted(() => {
-  void loadData();
-  projectRefreshTimer = setInterval(async () => {
-    try {
-      projects.value = await api.listProjects();
-    } catch {
-      // 后台静默刷新失败时保留当前页面数据。
-    }
-  }, 30_000);
-  analysisPollTimer = setInterval(() => void pollActiveAnalyses(), 2_000);
-});
+onMounted(() => void initializeAuth());
 
 onBeforeUnmount(() => {
-  if (projectRefreshTimer) clearInterval(projectRefreshTimer);
-  if (analysisPollTimer) clearInterval(analysisPollTimer);
+  stopBackgroundTasks();
 });
 </script>
 
 <template>
-  <div class="shell" v-loading="loading">
+  <div v-if="authLoading" class="auth-loading">
+    <div class="auth-loading-mark">IF</div>
+    <span>正在连接 Impact Flow</span>
+  </div>
+
+  <main v-else-if="!currentSession" class="auth-page">
+    <section class="auth-story">
+      <div class="auth-brand"><b>IF</b><span>IMPACT FLOW</span></div>
+      <div class="auth-story-copy">
+        <small>RELEASE INTELLIGENCE</small>
+        <h1>让每一次变更<br />都有清晰的影响边界</h1>
+        <p>持续巡检生产分支，串联代码影响、调用链与 AI 回归建议。</p>
+      </div>
+      <div class="auth-signal" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+    </section>
+
+    <section class="auth-panel">
+      <form class="auth-card" @submit.prevent="submitAuth">
+        <header>
+          <span class="auth-step">{{ bootstrapRequired ? "首次使用" : "账号登录" }}</span>
+          <h2>{{ bootstrapRequired ? "初始化工作空间" : "欢迎回来" }}</h2>
+          <p>
+            {{ bootstrapRequired
+              ? "创建首位所有者账号，现有服务数据将归入该工作空间。"
+              : "登录后继续查看服务巡检与变更分析。" }}
+          </p>
+        </header>
+
+        <template v-if="bootstrapRequired">
+          <label>
+            <span>工作空间</span>
+            <input v-model.trim="bootstrapForm.workspaceName" autocomplete="organization" />
+          </label>
+          <label>
+            <span>显示名称</span>
+            <input v-model.trim="bootstrapForm.displayName" autocomplete="name" />
+          </label>
+          <label>
+            <span>管理员账号</span>
+            <input v-model.trim="bootstrapForm.username" autocomplete="username" />
+          </label>
+          <label>
+            <span>登录密码</span>
+            <input v-model="bootstrapForm.password" type="password" autocomplete="new-password" placeholder="至少 8 个字符" />
+          </label>
+        </template>
+        <template v-else>
+          <label>
+            <span>账号</span>
+            <input v-model.trim="loginForm.username" autocomplete="username" autofocus />
+          </label>
+          <label>
+            <span>密码</span>
+            <input v-model="loginForm.password" type="password" autocomplete="current-password" />
+          </label>
+        </template>
+
+        <button class="auth-submit" :disabled="authSubmitting">
+          {{ authSubmitting ? "正在进入…" : bootstrapRequired ? "创建并进入" : "进入工作台" }}
+        </button>
+      </form>
+    </section>
+  </main>
+
+  <div v-else class="shell" v-loading="loading">
     <aside class="rail">
       <div class="brand-mark"><b>IF</b><span>IMPACT FLOW</span></div>
       <nav aria-label="主导航">
@@ -822,13 +1085,27 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="rail-button"
-          :class="{ active: activeView === 'ai-config' }"
-          @click="openAiConfigView"
+          :class="{ active: activeView === 'base-config' }"
+          @click="openBaseConfigView"
         >
           <el-icon><Setting /></el-icon>
-          <span>AI 配置</span>
+          <span>基础配置</span>
         </button>
       </nav>
+      <div class="rail-account">
+        <div class="rail-avatar">{{ currentSession.user.displayName.slice(0, 1) }}</div>
+        <div>
+          <strong>{{ currentSession.user.displayName }}</strong>
+          <span>{{ currentSession.workspace.name }}</span>
+        </div>
+        <button
+          v-if="canManageMembers"
+          title="成员管理"
+          aria-label="成员管理"
+          @click="openMembers"
+        ><el-icon><User /></el-icon></button>
+        <button title="退出登录" aria-label="退出登录" @click="logout">↗</button>
+      </div>
       <div class="rail-status" title="API 服务状态">
         <span></span>
       </div>
@@ -1691,127 +1968,210 @@ onBeforeUnmount(() => {
         </section>
       </template>
 
-      <template v-else>
-        <header class="topbar ai-config-topbar">
-          <div class="page-title">
-            <h1>AI 配置</h1>
-            <span
-              >管理多个 OpenAI 或 Anthropic 兼容接口，默认配置用于发布分析</span
-            >
-          </div>
-          <button class="add-project" @click="openCreateAiConfig">
-            <el-icon><Plus /></el-icon>
-            添加 AI 配置
-          </button>
-        </header>
-
-        <section class="ai-config-summary">
-          <div class="ai-config-summary-count">
-            <span>配置总数</span>
-            <strong>{{ aiConfigs.length }}</strong>
-          </div>
-          <div class="ai-config-summary-count active">
-            <span>已启用</span>
-            <strong>{{
-              aiConfigs.filter((item) => item.enabled).length
-            }}</strong>
-          </div>
-          <p>
-            <b>运行规则</b>
-            每次发布分析只调用一条“默认且已启用”的配置；API Key
-            已加密保存，页面仅显示末四位。
-          </p>
-        </section>
-
-        <section class="ai-config-panel" v-loading="aiConfigLoading">
-          <div class="ai-config-table-head">
-            <span>配置</span>
-            <span>接口与模型</span>
-            <span>分析限额</span>
-            <span>状态</span>
-            <span>操作</span>
-          </div>
-          <div v-if="aiConfigs.length" class="ai-config-table-body">
-            <article
-              v-for="config in aiConfigs"
-              :key="config.id"
-              class="ai-config-record"
-            >
-              <div class="ai-config-identity">
-                <span class="ai-provider-mark">AI</span>
-                <div>
-                  <strong>{{ config.name }}</strong>
-                  <small>{{ config.apiKeyMasked }}</small>
-                </div>
-                <em v-if="config.isDefault">默认</em>
-              </div>
-              <div class="ai-config-endpoint">
-                <code :title="config.baseUrl">{{ config.baseUrl }}</code>
-                <span>{{ config.model }}</span>
-                <small>{{
-                  config.apiFormat === "ANTHROPIC"
-                    ? "Anthropic Messages"
-                    : "OpenAI Chat Completions"
-                }}</small>
-              </div>
-              <div class="ai-config-limits">
-                <span>{{ config.timeoutMs / 1000 }}s 超时</span>
-                <span>{{ config.maxFiles }} 文件</span>
-                <span>{{ config.maxSymbols }} Symbol</span>
-              </div>
-              <div class="ai-config-state">
-                <button
-                  class="state-toggle"
-                  :class="{ enabled: config.enabled }"
-                  @click="toggleAiConfig(config, !config.enabled)"
-                >
-                  <i></i>{{ config.enabled ? "已启用" : "已停用" }}
-                </button>
-                <small v-if="aiConnectionResults[config.id]">
-                  最近测试 {{ aiConnectionResults[config.id].latencyMs }}ms
-                </small>
-              </div>
-              <div class="record-actions ai-config-actions">
-                <button
-                  class="connection-action"
-                  :disabled="testingAiConfigId === config.id"
-                  @click="testAiConfig(config)"
-                >
-                  <el-icon
-                    :class="{ spinning: testingAiConfigId === config.id }"
-                    ><Connection
-                  /></el-icon>
-                  <span>{{
-                    testingAiConfigId === config.id ? "测试中" : "测试"
-                  }}</span>
-                </button>
-                <button
-                  v-if="!config.isDefault"
-                  @click="makeDefaultAiConfig(config)"
-                >
-                  设为默认
-                </button>
-                <button title="编辑配置" @click="openEditAiConfig(config)">
-                  <el-icon><Edit /></el-icon><span>编辑</span>
-                </button>
-                <button
-                  class="danger"
-                  title="删除配置"
-                  @click="removeAiConfig(config)"
-                >
-                  <el-icon><Delete /></el-icon><span>删除</span>
-                </button>
-              </div>
-            </article>
-          </div>
-          <div v-else class="ai-config-empty">
-            <span>NO AI PROVIDER</span>
-            <h2>还没有 AI 接口配置</h2>
-            <p>添加一个 OpenAI 兼容接口，测试成功后设为默认配置。</p>
-            <button class="primary-action" @click="openCreateAiConfig">
+      <template v-else-if="activeView === 'base-config'">
+        <section class="base-config-section">
+          <header class="base-config-section-header">
+            <div>
+              <h2>AI 配置</h2>
+              <p>
+                管理多个 OpenAI 或 Anthropic 兼容接口。每次 AI
+                分析仅调用一条“默认且已启用”的配置；API Key
+                已加密保存，页面仅显示末四位。
+              </p>
+            </div>
+            <button class="add-project" @click="openCreateAiConfig">
+              <el-icon><Plus /></el-icon>
               添加 AI 配置
             </button>
-          </div>
+          </header>
+
+          <section class="ai-config-groups" v-loading="aiConfigLoading">
+            <div v-if="aiConfigs.length">
+              <article
+                v-for="config in aiConfigs"
+                :key="config.id"
+                class="ai-config-group"
+              >
+                <header class="ai-config-group-title">
+                  <div>
+                    <strong>{{ config.name }}</strong>
+                    <em v-if="config.isDefault">默认</em>
+                  </div>
+                  <div class="record-actions ai-config-actions">
+                    <button
+                      class="connection-action"
+                      :disabled="testingAiConfigId === config.id"
+                      @click="testAiConfig(config)"
+                    >
+                      <el-icon
+                        :class="{ spinning: testingAiConfigId === config.id }"
+                        ><Connection
+                      /></el-icon>
+                      <span>{{
+                        testingAiConfigId === config.id ? "测试中" : "测试连接"
+                      }}</span>
+                    </button>
+                    <button
+                      v-if="!config.isDefault"
+                      @click="makeDefaultAiConfig(config)"
+                    >
+                      设为默认
+                    </button>
+                    <button title="编辑配置" @click="openEditAiConfig(config)">
+                      <el-icon><Edit /></el-icon><span>编辑</span>
+                    </button>
+                    <button
+                      class="danger"
+                      title="删除配置"
+                      @click="removeAiConfig(config)"
+                    >
+                      <el-icon><Delete /></el-icon><span>删除</span>
+                    </button>
+                  </div>
+                </header>
+
+                <div class="ai-config-setting-line">
+                  <div class="ai-config-setting-item endpoint">
+                    <span class="ai-config-setting-label">接口地址</span>
+                    <code :title="config.baseUrl">{{ config.baseUrl }}</code>
+                  </div>
+                  <div class="ai-config-setting-item">
+                    <span class="ai-config-setting-label">模型服务</span>
+                    <strong>{{ config.model }}</strong>
+                    <span class="ai-config-protocol">{{
+                      config.apiFormat === "ANTHROPIC"
+                        ? "Anthropic"
+                        : "OpenAI"
+                    }}</span>
+                  </div>
+                  <div class="ai-config-setting-item limits">
+                    <span class="ai-config-setting-label">分析参数</span>
+                    <span class="ai-config-limit"
+                      >{{ config.timeoutMs / 1000 }}s</span
+                    >
+                    <span class="ai-config-limit"
+                      >{{ config.maxFiles }} 文件</span
+                    >
+                    <span class="ai-config-limit"
+                      >{{ config.maxSymbols }} Symbol</span
+                    >
+                  </div>
+                  <div class="ai-config-setting-item status">
+                    <span class="ai-config-setting-label">运行状态</span>
+                    <button
+                      class="state-toggle"
+                      :class="{ enabled: config.enabled }"
+                      @click="toggleAiConfig(config, !config.enabled)"
+                    >
+                      <i></i>{{ config.enabled ? "已启用" : "已停用" }}
+                    </button>
+                    <small v-if="aiConnectionResults[config.id]">
+                      {{ aiConnectionResults[config.id].latencyMs }}ms
+                    </small>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <div v-else class="ai-config-empty">
+              <span>NO AI PROVIDER</span>
+              <h2>还没有 AI 接口配置</h2>
+              <p>添加一个 OpenAI 兼容接口，测试成功后设为默认配置。</p>
+              <button class="primary-action" @click="openCreateAiConfig">
+                添加 AI 配置
+              </button>
+            </div>
+          </section>
+
+          <section
+            class="notification-config-section"
+            aria-label="待检测通知配置"
+            v-loading="pendingNotificationLoading"
+          >
+            <header class="base-config-section-header">
+              <div>
+                <h2>待检测通知</h2>
+                <p>
+                  巡检发现服务存在新的待检测提交时发送钉钉通知；同一服务的同一提交只通知一次。
+                </p>
+              </div>
+            </header>
+
+            <form
+              class="notification-config-group"
+              @submit.prevent="savePendingNotificationConfig"
+            >
+              <h3>钉钉机器人</h3>
+              <div class="notification-config-row">
+                <span class="notification-config-label">通知状态</span>
+                <button
+                  class="notification-option"
+                  :class="{ active: !pendingNotificationForm.enabled }"
+                  type="button"
+                  @click="pendingNotificationForm.enabled = false"
+                >
+                  <i></i>
+                  关闭
+                </button>
+                <button
+                  class="notification-option"
+                  :class="{ active: pendingNotificationForm.enabled }"
+                  type="button"
+                  @click="pendingNotificationForm.enabled = true"
+                >
+                  <i></i>
+                  开启
+                </button>
+              </div>
+              <div class="notification-config-row webhook">
+                <label
+                  class="notification-config-label"
+                  for="ding-talk-webhook"
+                  >Webhook</label
+                >
+                <input
+                  id="ding-talk-webhook"
+                  v-model="pendingNotificationForm.dingTalkWebhook"
+                  type="password"
+                  autocomplete="off"
+                  :placeholder="
+                    pendingNotificationConfig?.webhookMasked ??
+                    'https://oapi.dingtalk.com/robot/send?access_token=...'
+                  "
+                />
+                <span class="notification-config-help">
+                  {{
+                    pendingNotificationConfig?.webhookConfigured
+                      ? "已保存 Webhook，留空不会修改"
+                      : "请填写钉钉群自定义机器人的 Webhook"
+                  }}
+                </span>
+              </div>
+              <div class="notification-config-actions">
+                <button
+                  class="dialog-secondary"
+                  type="button"
+                  :disabled="
+                    testingPendingNotification ||
+                    !pendingNotificationConfig?.webhookConfigured
+                  "
+                  @click="testPendingNotification"
+                >
+                  <el-icon
+                    :class="{ spinning: testingPendingNotification }"
+                    ><Connection
+                  /></el-icon>
+                  {{ testingPendingNotification ? "发送中" : "发送测试通知" }}
+                </button>
+                <button
+                  class="dialog-primary"
+                  type="submit"
+                  :disabled="savingPendingNotification"
+                >
+                  {{ savingPendingNotification ? "保存中" : "保存配置" }}
+                </button>
+              </div>
+            </form>
+          </section>
         </section>
       </template>
     </main>
@@ -2224,6 +2584,47 @@ onBeforeUnmount(() => {
           }}
         </button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="membersVisible" title="工作空间成员" width="720px">
+      <div class="member-manager" v-loading="membersLoading">
+        <p class="member-create-hint">
+          账号至少 3 位，仅支持字母、数字及 . _ @ -；初始密码至少 8 位。
+        </p>
+        <div class="member-create-row">
+          <el-input v-model="memberForm.displayName" placeholder="显示名称" />
+          <el-input v-model="memberForm.username" placeholder="登录账号" />
+          <el-input
+            v-model="memberForm.password"
+            type="password"
+            show-password
+            placeholder="初始密码（至少 8 位）"
+          />
+          <el-select v-model="memberForm.role" aria-label="成员角色">
+            <el-option label="管理员" value="ADMIN" />
+            <el-option label="成员" value="MEMBER" />
+            <el-option label="只读" value="VIEWER" />
+          </el-select>
+          <button
+            class="dialog-primary"
+            :disabled="memberCreating || !memberFormValid"
+            @click="createMember"
+          >
+            {{ memberCreating ? "创建中…" : "添加成员" }}
+          </button>
+        </div>
+        <div class="member-list">
+          <div class="member-list-head">
+            <span>成员</span><span>账号</span><span>角色</span><span>加入时间</span>
+          </div>
+          <div v-for="member in members" :key="member.userId" class="member-list-row">
+            <strong>{{ member.displayName }}</strong>
+            <code>{{ member.username }}</code>
+            <span class="member-role">{{ member.role }}</span>
+            <time>{{ formatLogTime(member.joinedAt) }}</time>
+          </div>
+        </div>
+      </div>
     </el-dialog>
   </div>
 </template>
