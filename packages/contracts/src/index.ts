@@ -20,6 +20,38 @@ export interface RegressionSuggestion {
   priority: 'P0' | 'P1' | 'P2';
 }
 
+export type CodeSymbolKind =
+  | 'CLASS'
+  | 'METHOD'
+  | 'FUNCTION'
+  | 'INTERFACE'
+  | 'TYPE'
+  | 'PROPERTY';
+
+export interface CodeSymbolReference {
+  key: string;
+  name: string;
+  qualifiedName: string;
+  kind: CodeSymbolKind;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+}
+
+export interface SymbolChange extends CodeSymbolReference {
+  changeType: 'ADDED' | 'MODIFIED' | 'DELETED';
+  riskLevel: RiskLevel;
+  reason: string;
+}
+
+export interface SymbolImpact {
+  changedSymbolKey: string;
+  impactedSymbol: CodeSymbolReference;
+  depth: number;
+  callChain: CodeSymbolReference[];
+  reason: string;
+}
+
 export type FileChangeType = 'A' | 'M' | 'D' | 'R' | 'C' | 'T' | 'U';
 
 export interface ChangedFile {
@@ -119,6 +151,9 @@ export interface AnalysisTask {
   riskSummary: string | null;
   impactedModules?: ImpactModule[];
   regressionSuggestions?: RegressionSuggestion[];
+  symbolSummary?: string | null;
+  symbolChanges?: SymbolChange[];
+  symbolImpacts?: SymbolImpact[];
   commits?: CommitSummary[];
   files?: ChangedFile[];
   createdAt: string;

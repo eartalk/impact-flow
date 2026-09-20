@@ -25,6 +25,9 @@ type AnalysisRow = RowDataPacket & {
   risk_summary: string | null;
   impacted_modules: string | AnalysisTask['impactedModules'] | null;
   regression_suggestions: string | AnalysisTask['regressionSuggestions'] | null;
+  symbol_summary: string | null;
+  symbol_changes: string | AnalysisTask['symbolChanges'] | null;
+  symbol_impacts: string | AnalysisTask['symbolImpacts'] | null;
   commit_summary: string | CommitSummary[] | null;
   created_at: string;
   finished_at: string | null;
@@ -162,6 +165,9 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       riskSummary: string;
       impactedModules: NonNullable<AnalysisTask['impactedModules']>;
       regressionSuggestions: NonNullable<AnalysisTask['regressionSuggestions']>;
+      symbolSummary: string;
+      symbolChanges: NonNullable<AnalysisTask['symbolChanges']>;
+      symbolImpacts: NonNullable<AnalysisTask['symbolImpacts']>;
     },
   ): Promise<AnalysisTask> {
     const db = await this.database.connection();
@@ -173,6 +179,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
          SET status = 'SUCCESS', commit_count = ?, changed_file_count = ?,
              additions = ?, deletions = ?, commit_summary = ?, risk_level = ?,
              risk_summary = ?, impacted_modules = ?, regression_suggestions = ?,
+             symbol_summary = ?, symbol_changes = ?, symbol_impacts = ?,
              finished_at = CURRENT_TIMESTAMP(3)
          WHERE id = ?`,
         [
@@ -185,6 +192,9 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
           result.riskSummary,
           JSON.stringify(result.impactedModules),
           JSON.stringify(result.regressionSuggestions),
+          result.symbolSummary,
+          JSON.stringify(result.symbolChanges),
+          JSON.stringify(result.symbolImpacts),
           id,
         ],
       );
@@ -254,6 +264,8 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       : undefined;
     const impactedModules = this.parseJson(row.impacted_modules);
     const regressionSuggestions = this.parseJson(row.regression_suggestions);
+    const symbolChanges = this.parseJson(row.symbol_changes) ?? [];
+    const symbolImpacts = this.parseJson(row.symbol_impacts) ?? [];
     return {
       id: row.id,
       projectId: row.project_id,
@@ -270,6 +282,9 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       riskSummary: row.risk_summary,
       impactedModules,
       regressionSuggestions,
+      symbolSummary: row.symbol_summary,
+      symbolChanges,
+      symbolImpacts,
       commits,
       createdAt: new Date(row.created_at).toISOString(),
       finishedAt: row.finished_at

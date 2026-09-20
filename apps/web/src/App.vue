@@ -16,6 +16,7 @@ import {
 import { ElMessage, ElMessageBox } from "element-plus";
 import type {
   AnalysisTask,
+  CodeSymbolKind,
   CreateProjectInput,
   InspectionLog,
   InspectionLogQuery,
@@ -174,6 +175,21 @@ function riskLabel(level: AnalysisTask["riskLevel"]) {
     HIGH: "高风险",
     CRITICAL: "严重风险",
   }[level ?? "LOW"];
+}
+
+function symbolKindLabel(kind: CodeSymbolKind) {
+  return {
+    CLASS: "类",
+    METHOD: "方法",
+    FUNCTION: "函数",
+    INTERFACE: "接口",
+    TYPE: "类型",
+    PROPERTY: "属性",
+  }[kind];
+}
+
+function symbolChangeLabel(changeType: "ADDED" | "MODIFIED" | "DELETED") {
+  return { ADDED: "新增", MODIFIED: "修改", DELETED: "删除" }[changeType];
 }
 
 function analysisDetail(projectId: string) {
@@ -742,6 +758,90 @@ onBeforeUnmount(() => {
                           </li>
                         </ol>
                       </div>
+                    </div>
+                  </section>
+
+                  <section
+                    v-if="analysisDetail(project.id)?.symbolSummary"
+                    class="symbol-analysis"
+                  >
+                    <header class="symbol-analysis-header">
+                      <span class="symbol-analysis-icon"><DataAnalysis /></span>
+                      <div>
+                        <strong>TypeScript Symbol 影响</strong>
+                        <p>{{ analysisDetail(project.id)?.symbolSummary }}</p>
+                      </div>
+                    </header>
+
+                    <div
+                      v-if="analysisDetail(project.id)?.symbolChanges?.length"
+                      class="symbol-analysis-grid"
+                    >
+                      <div class="symbol-change-panel">
+                        <h4>
+                          变更 Symbol
+                          <span>{{ analysisDetail(project.id)?.symbolChanges?.length }}</span>
+                        </h4>
+                        <div class="symbol-change-list">
+                          <article
+                            v-for="symbol in analysisDetail(project.id)?.symbolChanges?.slice(0, 12)"
+                            :key="`${symbol.changeType}-${symbol.key}`"
+                          >
+                            <span
+                              class="symbol-change-type"
+                              :class="symbol.changeType.toLowerCase()"
+                            >
+                              {{ symbolChangeLabel(symbol.changeType) }}
+                            </span>
+                            <div>
+                              <strong>{{ symbol.qualifiedName }}</strong>
+                              <p>
+                                {{ symbolKindLabel(symbol.kind) }} ·
+                                {{ symbol.filePath }}:{{ symbol.startLine }}
+                              </p>
+                            </div>
+                            <span
+                              class="symbol-risk"
+                              :class="symbol.riskLevel.toLowerCase()"
+                            >
+                              {{ riskLabel(symbol.riskLevel) }}
+                            </span>
+                          </article>
+                        </div>
+                      </div>
+
+                      <div class="symbol-chain-panel">
+                        <h4>
+                          上游调用链
+                          <span>{{ analysisDetail(project.id)?.symbolImpacts?.length ?? 0 }}</span>
+                        </h4>
+                        <div
+                          v-if="analysisDetail(project.id)?.symbolImpacts?.length"
+                          class="symbol-chain-list"
+                        >
+                          <article
+                            v-for="impact in analysisDetail(project.id)?.symbolImpacts?.slice(0, 10)"
+                            :key="`${impact.changedSymbolKey}-${impact.impactedSymbol.key}`"
+                          >
+                            <div class="symbol-chain-depth">{{ impact.depth }} 层</div>
+                            <div class="symbol-chain-path">
+                              <template
+                                v-for="(node, index) in impact.callChain"
+                                :key="node.key"
+                              >
+                                <code>{{ node.qualifiedName }}</code>
+                                <ArrowRight v-if="index < impact.callChain.length - 1" />
+                              </template>
+                            </div>
+                          </article>
+                        </div>
+                        <div v-else class="symbol-chain-empty">
+                          未发现项目内的上游静态调用
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else class="symbol-analysis-empty">
+                      本次 TypeScript 变更没有落在可识别的类、方法、函数或类型上。
                     </div>
                   </section>
 

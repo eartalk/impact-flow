@@ -10,7 +10,9 @@ Git 生产版本变更影响分析平台的 MVP 框架。
 → 用户点击开始检测
 → 分析任务立即入队并在后台执行
 → 生成 Commit、文件级 Diff 和变更影响评估
-→ 保存风险等级、影响模块、回归建议与文件明细
+→ 通过 TypeScript AST 将变更行映射到类、方法、函数与类型
+→ 反向追踪最多 3 层项目内静态调用链
+→ 保存风险等级、影响模块、Symbol、调用链、回归建议与文件明细
 ```
 
 ## 目录
@@ -49,6 +51,7 @@ REPOSITORY_CACHE_DIR=E:/AI/impact-flow/var/repositories
 VERSION_CHECK_ENABLED=true
 VERSION_CHECK_INTERVAL_MS=300000
 INSPECTION_LOG_RETENTION_DAYS=30
+SYMBOL_ANALYSIS_MAX_FILES=1500
 DATABASE_HOST=127.0.0.1
 DATABASE_PORT=3306
 DATABASE_NAME=impact_flow
@@ -62,7 +65,7 @@ DATABASE_PASSWORD_BASE64=base64-encoded-admin-password
 DATABASE_PASSWORD_FILE=/run/secrets/mysql-root-password
 ```
 
-数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库依次执行 `database/002_add_table_column_comments.sql`、`database/003_add_project_inspection.sql`、`database/004_add_project_inspection_log.sql` 和 `database/005_add_analysis_impact.sql`。
+数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库依次执行 `database/002_add_table_column_comments.sql`、`database/003_add_project_inspection.sql`、`database/004_add_project_inspection_log.sql`、`database/005_add_analysis_impact.sql` 和 `database/006_add_analysis_symbols.sql`。
 
 私有 Codeup 仓库需要保证运行 API 的系统账号拥有对应 SSH Key，且首次连接所需的主机指纹已经加入 `known_hosts`。
 
@@ -97,6 +100,6 @@ pnpm build
 ## 下一阶段
 
 1. 增加钉钉新推送与巡检失败通知。
-2. 增加 TypeScript AST Symbol 识别，提升模块与调用链定位精度。
+2. 扩展 Vue SFC、继承/接口实现关系与跨仓库调用链识别。
 3. 接入可配置的 AI 模型，对确定性风险规则的结果进行补充说明。
 4. 将应用内后台队列升级为独立 Worker，支持并发限制与任务重试。

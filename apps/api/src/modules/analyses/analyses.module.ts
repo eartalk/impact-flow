@@ -2,10 +2,16 @@ import { Module } from '@nestjs/common';
 import { ProjectsModule } from '../projects/projects.module';
 import { AnalysesController } from './analyses.controller';
 import { AnalysesService } from './analyses.service';
+import { SYMBOL_ANALYZER_GATEWAY } from '../../core/ports/symbol-analyzer.gateway';
+import { TypeScriptSymbolAnalyzer } from '../../infrastructure/typescript/typescript-symbol.analyzer';
 
 @Module({
   imports: [ProjectsModule],
   controllers: [AnalysesController],
-  providers: [AnalysesService],
+  providers: [
+    AnalysesService,
+    TypeScriptSymbolAnalyzer,
+    { provide: SYMBOL_ANALYZER_GATEWAY, useExisting: TypeScriptSymbolAnalyzer },
+  ],
 })
 export class AnalysesModule {}

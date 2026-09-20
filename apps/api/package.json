@@ -20,7 +20,8 @@
     "mysql2": "^3.24.4",
     "reflect-metadata": "latest",
     "rxjs": "latest",
-    "simple-git": "latest"
+    "simple-git": "latest",
+    "typescript": "5.9.3"
   },
   "devDependencies": {
     "@nestjs/cli": "11.0.24",
@@ -28,7 +29,6 @@
     "@types/jest": "29.5.14",
     "@types/node": "latest",
     "jest": "29.7.0",
-    "ts-jest": "29.4.5",
-    "typescript": "5.9.3"
+    "ts-jest": "29.4.5"
   }
 }

@@ -24,6 +24,9 @@ export interface AnalysisRepository {
       riskSummary: string;
       impactedModules: NonNullable<AnalysisTask['impactedModules']>;
       regressionSuggestions: NonNullable<AnalysisTask['regressionSuggestions']>;
+      symbolSummary: string;
+      symbolChanges: NonNullable<AnalysisTask['symbolChanges']>;
+      symbolImpacts: NonNullable<AnalysisTask['symbolImpacts']>;
     },
   ): Promise<AnalysisTask>;
   fail(id: string, errorMessage: string): Promise<AnalysisTask>;
