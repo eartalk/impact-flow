@@ -1,5 +1,10 @@
 import type {
   AnalysisTask,
+  AnalysisLogPage,
+  AnalysisLogQuery,
+  AiProviderConfig,
+  AiProviderConnectionTest,
+  CreateAiProviderConfigInput,
   CreateProjectInput,
   InspectionLog,
   InspectionLogPage,
@@ -7,6 +12,7 @@ import type {
   Project,
   RepositoryConnectionTest,
   UpdateProjectInput,
+  UpdateAiProviderConfigInput,
   VersionDetection,
 } from '@impact-flow/contracts';
 
@@ -77,4 +83,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ projectId }),
     }),
+  rerunAnalysis: (id: string) =>
+    request<AnalysisTask>(`/api/analyses/${id}/rerun`, {
+      method: 'POST',
+    }),
+  runAiAnalysis: (id: string) =>
+    request<AnalysisTask>(`/api/analyses/${id}/ai-analysis`, {
+      method: 'POST',
+    }),
+  listAnalysisLogs: (query: AnalysisLogQuery) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    return request<AnalysisLogPage>(`/api/analyses/logs?${params.toString()}`);
+  },
+  listAiConfigs: () => request<AiProviderConfig[]>('/api/ai-configs'),
+  createAiConfig: (input: CreateAiProviderConfigInput) =>
+    request<AiProviderConfig>('/api/ai-configs', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  updateAiConfig: (id: string, input: UpdateAiProviderConfigInput) =>
+    request<AiProviderConfig>(`/api/ai-configs/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  deleteAiConfig: (id: string) =>
+    request<{ deleted: boolean }>(`/api/ai-configs/${id}`, { method: 'DELETE' }),
+  testAiConfig: (id: string) =>
+    request<AiProviderConnectionTest>(`/api/ai-configs/${id}/test`, { method: 'POST' }),
 };
