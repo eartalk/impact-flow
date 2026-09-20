@@ -18,6 +18,77 @@ export interface RegressionSuggestion {
   title: string;
   scope: string;
   priority: 'P0' | 'P1' | 'P2';
+  entryPoints?: string[];
+  scenarios?: string[];
+  steps?: string[];
+  expectedResults?: string[];
+  evidence?: string[];
+  confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+export interface ChangeEvidence {
+  filePath: string;
+  oldPath: string | null;
+  changeType: FileChangeType;
+  patch: string;
+  truncated: boolean;
+}
+
+export type AiAnalysisStatus = 'DISABLED' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+
+export interface AiAnalysisResult {
+  status: AiAnalysisStatus;
+  summary: string | null;
+  riskLevel: RiskLevel | null;
+  keyFindings: string[];
+  regressionSuggestions: RegressionSuggestion[];
+  model: string | null;
+  analyzedAt: string | null;
+  errorMessage: string | null;
+  tokenUsage?: {
+    prompt: number;
+    completion: number;
+    total: number;
+  };
+}
+
+export interface AiProviderConfig {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  apiFormat: 'OPENAI' | 'ANTHROPIC';
+  enabled: boolean;
+  isDefault: boolean;
+  apiKeyMasked: string;
+  timeoutMs: number;
+  maxFiles: number;
+  maxSymbols: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAiProviderConfigInput {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  apiFormat: 'OPENAI' | 'ANTHROPIC';
+  enabled: boolean;
+  isDefault: boolean;
+  timeoutMs: number;
+  maxFiles: number;
+  maxSymbols: number;
+}
+
+export type UpdateAiProviderConfigInput = Partial<CreateAiProviderConfigInput>;
+
+export interface AiProviderConnectionTest {
+  success: boolean;
+  message: string;
+  model: string;
+  latencyMs: number;
+  checkedAt: string;
 }
 
 export type CodeSymbolKind =
@@ -27,6 +98,12 @@ export type CodeSymbolKind =
   | 'INTERFACE'
   | 'TYPE'
   | 'PROPERTY';
+
+export interface HttpRouteReference {
+  method: string;
+  path: string;
+  role: 'SERVER' | 'CLIENT';
+}
 
 export interface CodeSymbolReference {
   key: string;
@@ -38,6 +115,7 @@ export interface CodeSymbolReference {
   endLine: number;
   projectId?: string;
   projectName?: string;
+  httpRoutes?: HttpRouteReference[];
 }
 
 export interface SymbolChange extends CodeSymbolReference {
@@ -156,10 +234,46 @@ export interface AnalysisTask {
   symbolSummary?: string | null;
   symbolChanges?: SymbolChange[];
   symbolImpacts?: SymbolImpact[];
+  changeEvidence?: ChangeEvidence[];
+  aiAnalysis?: AiAnalysisResult | null;
   commits?: CommitSummary[];
   files?: ChangedFile[];
   createdAt: string;
   finishedAt: string | null;
+}
+
+export type AnalysisLogType = 'CHANGE_ANALYSIS' | 'AI_ANALYSIS';
+
+export interface AnalysisExecutionLog {
+  id: string;
+  analysisId: string;
+  projectId: string;
+  projectName: string;
+  type: AnalysisLogType;
+  status: AnalysisStatus | AiAnalysisStatus;
+  baseCommit: string;
+  targetCommit: string;
+  model: string | null;
+  errorMessage: string | null;
+  tokenUsage: AiAnalysisResult['tokenUsage'] | null;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+}
+
+export interface AnalysisLogQuery {
+  projectId: string;
+  type: AnalysisLogType;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AnalysisLogPage {
+  items: AnalysisExecutionLog[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 
 export interface RepositoryConnectionTest {
