@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
 import type {
+  AnalysisExecutionLog,
+  AnalysisLogPage,
+  AnalysisLogQuery,
   AnalysisTask,
+  AiAnalysisResult,
+  ChangeEvidence,
   ChangedFile,
   CommitSummary,
 } from '@impact-flow/contracts';
@@ -28,6 +33,8 @@ type AnalysisRow = RowDataPacket & {
   symbol_summary: string | null;
   symbol_changes: string | AnalysisTask['symbolChanges'] | null;
   symbol_impacts: string | AnalysisTask['symbolImpacts'] | null;
+  change_evidence: string | ChangeEvidence[] | null;
+  ai_analysis: string | AnalysisTask['aiAnalysis'] | null;
   commit_summary: string | CommitSummary[] | null;
   created_at: string;
   finished_at: string | null;
@@ -41,6 +48,25 @@ type ChangeFileRow = RowDataPacket & {
   additions: number;
   deletions: number;
 };
+
+type AnalysisLogRow = RowDataPacket & {
+  id: string;
+  analysis_id: string;
+  project_id: string;
+  project_name: string;
+  type: AnalysisExecutionLog['type'];
+  status: AnalysisExecutionLog['status'];
+  base_commit: string;
+  target_commit: string;
+  model: string | null;
+  error_message: string | null;
+  token_usage: string | AnalysisExecutionLog['tokenUsage'] | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | string | null;
+};
+
+type CountRow = RowDataPacket & { total: number };
 
 @Injectable()
 export class MysqlAnalysisRepository implements AnalysisRepository {
@@ -87,6 +113,16 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return rows.map((row) => this.map(row));
   }
 
+  async findPendingAi(): Promise<AnalysisTask[]> {
+    const db = await this.database.connection();
+    const [rows] = await db.query<AnalysisRow[]>(
+      `${this.baseSelect()}
+       WHERE JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.status')) = 'RUNNING'
+       ORDER BY a.created_at`,
+    );
+    return rows.map((row) => this.map(row));
+  }
+
   async findActiveByProject(projectId: string): Promise<AnalysisTask | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
@@ -96,6 +132,52 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       [projectId],
     );
     return rows[0] ? this.map(rows[0]) : null;
+  }
+
+  async listLogs(query: AnalysisLogQuery): Promise<AnalysisLogPage> {
+    const db = await this.database.connection();
+    const page = Math.max(1, query.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 10));
+    const offset = (page - 1) * pageSize;
+    const changeAnalysis = query.type === 'CHANGE_ANALYSIS';
+    const countSql = changeAnalysis
+      ? 'SELECT COUNT(*) AS total FROM analysis_task WHERE project_id = ?'
+      : 'SELECT COUNT(*) AS total FROM ai_analysis_log WHERE project_id = ?';
+    const [counts] = await db.query<CountRow[]>(countSql, [query.projectId]);
+    const total = Number(counts[0]?.total ?? 0);
+
+    const sql = changeAnalysis
+      ? `SELECT a.id, a.id AS analysis_id, a.project_id, p.name AS project_name,
+                'CHANGE_ANALYSIS' AS type, a.status, a.base_commit, a.target_commit,
+                NULL AS model, a.error_message, NULL AS token_usage,
+                a.created_at AS started_at, a.finished_at,
+                TIMESTAMPDIFF(MICROSECOND, a.created_at, a.finished_at) / 1000 AS duration_ms
+         FROM analysis_task a
+         JOIN project p ON p.id = a.project_id
+         WHERE a.project_id = ?
+         ORDER BY a.created_at DESC LIMIT ? OFFSET ?`
+      : `SELECT l.id, l.analysis_task_id AS analysis_id, l.project_id,
+                p.name AS project_name, 'AI_ANALYSIS' AS type, l.status,
+                a.base_commit, a.target_commit, l.model, l.error_message,
+                l.token_usage, l.started_at, l.finished_at,
+                TIMESTAMPDIFF(MICROSECOND, l.started_at, l.finished_at) / 1000 AS duration_ms
+         FROM ai_analysis_log l
+         JOIN analysis_task a ON a.id = l.analysis_task_id
+         JOIN project p ON p.id = l.project_id
+         WHERE l.project_id = ?
+         ORDER BY l.started_at DESC LIMIT ? OFFSET ?`;
+    const [rows] = await db.query<AnalysisLogRow[]>(sql, [
+      query.projectId,
+      pageSize,
+      offset,
+    ]);
+    return {
+      items: rows.map((row) => this.mapLog(row)),
+      total,
+      page,
+      pageSize,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 
   async create(
@@ -168,6 +250,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       symbolSummary: string;
       symbolChanges: NonNullable<AnalysisTask['symbolChanges']>;
       symbolImpacts: NonNullable<AnalysisTask['symbolImpacts']>;
+      changeEvidence: ChangeEvidence[];
     },
   ): Promise<AnalysisTask> {
     const db = await this.database.connection();
@@ -179,7 +262,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
          SET status = 'SUCCESS', commit_count = ?, changed_file_count = ?,
              additions = ?, deletions = ?, commit_summary = ?, risk_level = ?,
              risk_summary = ?, impacted_modules = ?, regression_suggestions = ?,
-             symbol_summary = ?, symbol_changes = ?, symbol_impacts = ?,
+             symbol_summary = ?, symbol_changes = ?, symbol_impacts = ?, change_evidence = ?,
              finished_at = CURRENT_TIMESTAMP(3)
          WHERE id = ?`,
         [
@@ -195,6 +278,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
           result.symbolSummary,
           JSON.stringify(result.symbolChanges),
           JSON.stringify(result.symbolImpacts),
+          JSON.stringify(result.changeEvidence),
           id,
         ],
       );
@@ -205,6 +289,64 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
          SET r.status = 'ANALYZED'
          WHERE a.id = ?`,
         [id],
+      );
+      await connection.commit();
+      return (await this.findById(id))!;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async startAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask> {
+    const db = await this.database.connection();
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        'UPDATE analysis_task SET ai_analysis = ? WHERE id = ?',
+        [JSON.stringify(result), id],
+      );
+      await connection.execute(
+        `INSERT INTO ai_analysis_log
+         (id, analysis_task_id, project_id, status)
+         SELECT ?, id, project_id, 'RUNNING' FROM analysis_task WHERE id = ?`,
+        [randomUUID(), id],
+      );
+      await connection.commit();
+      return (await this.findById(id))!;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async finishAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask> {
+    const db = await this.database.connection();
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        'UPDATE analysis_task SET ai_analysis = ? WHERE id = ?',
+        [JSON.stringify(result), id],
+      );
+      await connection.execute(
+        `UPDATE ai_analysis_log
+         SET status = ?, model = ?, error_message = ?, token_usage = ?,
+             finished_at = CURRENT_TIMESTAMP(3)
+         WHERE analysis_task_id = ? AND status = 'RUNNING'
+         ORDER BY started_at DESC LIMIT 1`,
+        [
+          result.status,
+          result.model,
+          result.errorMessage,
+          result.tokenUsage ? JSON.stringify(result.tokenUsage) : null,
+          id,
+        ],
       );
       await connection.commit();
       return (await this.findById(id))!;
@@ -266,6 +408,8 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     const regressionSuggestions = this.parseJson(row.regression_suggestions);
     const symbolChanges = this.parseJson(row.symbol_changes) ?? [];
     const symbolImpacts = this.parseJson(row.symbol_impacts) ?? [];
+    const changeEvidence = this.parseJson<ChangeEvidence[]>(row.change_evidence) ?? [];
+    const aiAnalysis = this.parseJson(row.ai_analysis) ?? null;
     return {
       id: row.id,
       projectId: row.project_id,
@@ -285,11 +429,32 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       symbolSummary: row.symbol_summary,
       symbolChanges,
       symbolImpacts,
+      changeEvidence,
+      aiAnalysis,
       commits,
       createdAt: new Date(row.created_at).toISOString(),
       finishedAt: row.finished_at
         ? new Date(row.finished_at).toISOString()
         : null,
+    };
+  }
+
+  private mapLog(row: AnalysisLogRow): AnalysisExecutionLog {
+    return {
+      id: row.id,
+      analysisId: row.analysis_id,
+      projectId: row.project_id,
+      projectName: row.project_name,
+      type: row.type,
+      status: row.status,
+      baseCommit: row.base_commit,
+      targetCommit: row.target_commit,
+      model: row.model,
+      errorMessage: row.error_message,
+      tokenUsage: this.parseJson(row.token_usage) ?? null,
+      startedAt: new Date(row.started_at).toISOString(),
+      finishedAt: row.finished_at ? new Date(row.finished_at).toISOString() : null,
+      durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
     };
   }
 
