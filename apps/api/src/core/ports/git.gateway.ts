@@ -34,7 +34,6 @@ export interface GitGateway {
   }): Promise<{
     commits: import('@impact-flow/contracts').CommitSummary[];
     files: import('@impact-flow/contracts').ChangedFile[];
-    changeEvidence: import('@impact-flow/contracts').ChangeEvidence[];
     additions: number;
     deletions: number;
   }>;

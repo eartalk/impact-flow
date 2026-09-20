@@ -4,7 +4,6 @@ import { HealthController } from './health.controller';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { AnalysesModule } from './modules/analyses/analyses.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
-import { AiConfigsModule } from './modules/ai-configs/ai-configs.module';
 
 @Module({
   imports: [
@@ -13,7 +12,6 @@ import { AiConfigsModule } from './modules/ai-configs/ai-configs.module';
       envFilePath: ['../../.env', '.env'],
     }),
     PersistenceModule,
-    AiConfigsModule,
     ProjectsModule,
     AnalysesModule,
   ],

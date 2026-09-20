@@ -4,9 +4,6 @@ import { ANALYSIS_REPOSITORY } from '../../core/ports/analysis.repository';
 import { DatabaseService } from './database.service';
 import { MysqlProjectRepository } from './mysql-project.repository';
 import { MysqlAnalysisRepository } from './mysql-analysis.repository';
-import { AI_CONFIG_REPOSITORY } from '../../core/ports/ai-config.repository';
-import { MysqlAiConfigRepository } from './mysql-ai-config.repository';
-import { SecretCipher } from '../security/secret-cipher';
 
 @Global()
 @Module({
@@ -14,8 +11,6 @@ import { SecretCipher } from '../security/secret-cipher';
     DatabaseService,
     MysqlProjectRepository,
     MysqlAnalysisRepository,
-    MysqlAiConfigRepository,
-    SecretCipher,
     {
       provide: PROJECT_REPOSITORY,
       useExisting: MysqlProjectRepository,
@@ -24,17 +19,7 @@ import { SecretCipher } from '../security/secret-cipher';
       provide: ANALYSIS_REPOSITORY,
       useExisting: MysqlAnalysisRepository,
     },
-    {
-      provide: AI_CONFIG_REPOSITORY,
-      useExisting: MysqlAiConfigRepository,
-    },
   ],
-  exports: [
-    PROJECT_REPOSITORY,
-    ANALYSIS_REPOSITORY,
-    AI_CONFIG_REPOSITORY,
-    DatabaseService,
-    SecretCipher,
-  ],
+  exports: [PROJECT_REPOSITORY, ANALYSIS_REPOSITORY, DatabaseService],
 })
 export class PersistenceModule {}
