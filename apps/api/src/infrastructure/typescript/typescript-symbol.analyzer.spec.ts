@@ -54,6 +54,7 @@ describe('TypeScriptSymbolAnalyzer', () => {
     );
     const result = await analyzer.analyzeRange({
       projectId,
+      projectName: 'Demo Project',
       baseCommit,
       targetCommit,
     });
@@ -76,5 +77,180 @@ describe('TypeScriptSymbolAnalyzer', () => {
         }),
       ]),
     );
+  });
+
+  it('maps Vue script setup changes and traces TypeScript callers', async () => {
+    const projectId = 'vue-project';
+    const repositoryPath = join(cacheRoot, projectId);
+    await mkdir(repositoryPath, { recursive: true });
+    const git = simpleGit(repositoryPath);
+    await git.init();
+    await git.addConfig('user.name', 'Impact Flow Test');
+    await git.addConfig('user.email', 'test@impact-flow.local');
+    await writeFile(
+      join(repositoryPath, 'Panel.vue'),
+      '<template><button>Run</button></template>\n<script setup lang="ts">\nexport function loadPanel() {\n  return 1;\n}\n</script>\n',
+    );
+    await writeFile(
+      join(repositoryPath, 'consumer.ts'),
+      "import { loadPanel } from './Panel.vue';\nexport function renderPanel() { return loadPanel(); }\n",
+    );
+    await git.add('.');
+    await git.commit('base vue component');
+    const baseCommit = (await git.revparse(['HEAD'])).trim();
+    await writeFile(
+      join(repositoryPath, 'Panel.vue'),
+      '<template><button>Run</button></template>\n<script setup lang="ts">\nexport function loadPanel() {\n  return 2;\n}\n</script>\n',
+    );
+    await git.add('.');
+    await git.commit('change vue component');
+    const targetCommit = (await git.revparse(['HEAD'])).trim();
+
+    const analyzer = new TypeScriptSymbolAnalyzer(
+      new ConfigService({ REPOSITORY_CACHE_DIR: cacheRoot }),
+    );
+    const result = await analyzer.analyzeRange({
+      projectId,
+      projectName: 'Vue Project',
+      baseCommit,
+      targetCommit,
+    });
+
+    expect(result.symbolChanges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ qualifiedName: 'loadPanel', filePath: 'Panel.vue' }),
+      ]),
+    );
+    expect(result.symbolImpacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          impactedSymbol: expect.objectContaining({ qualifiedName: 'renderPanel' }),
+        }),
+      ]),
+    );
+  });
+
+  it('propagates implementation changes through interface callers', async () => {
+    const projectId = 'interface-project';
+    const repositoryPath = join(cacheRoot, projectId);
+    await mkdir(repositoryPath, { recursive: true });
+    const git = simpleGit(repositoryPath);
+    await git.init();
+    await git.addConfig('user.name', 'Impact Flow Test');
+    await git.addConfig('user.email', 'test@impact-flow.local');
+    await writeFile(
+      join(repositoryPath, 'runner.ts'),
+      'export interface Runner { run(): number; }\n',
+    );
+    await writeFile(
+      join(repositoryPath, 'runner.impl.ts'),
+      "import { Runner } from './runner';\nexport class RunnerImpl implements Runner {\n  run() { return 1; }\n}\n",
+    );
+    await writeFile(
+      join(repositoryPath, 'consumer.ts'),
+      "import { Runner } from './runner';\nexport class Consumer {\n  constructor(private readonly runner: Runner) {}\n  execute() { return this.runner.run(); }\n}\n",
+    );
+    await git.add('.');
+    await git.commit('base interface');
+    const baseCommit = (await git.revparse(['HEAD'])).trim();
+    await writeFile(
+      join(repositoryPath, 'runner.impl.ts'),
+      "import { Runner } from './runner';\nexport class RunnerImpl implements Runner {\n  run() { return 2; }\n}\n",
+    );
+    await git.add('.');
+    await git.commit('change implementation');
+    const targetCommit = (await git.revparse(['HEAD'])).trim();
+
+    const analyzer = new TypeScriptSymbolAnalyzer(
+      new ConfigService({ REPOSITORY_CACHE_DIR: cacheRoot }),
+    );
+    const result = await analyzer.analyzeRange({
+      projectId,
+      projectName: 'Interface Project',
+      baseCommit,
+      targetCommit,
+    });
+
+    expect(result.symbolImpacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          impactedSymbol: expect.objectContaining({ qualifiedName: 'Consumer.execute' }),
+          depth: 2,
+        }),
+      ]),
+    );
+  });
+
+  it('traces callers from a related repository through package imports', async () => {
+    const sharedId = 'shared-project';
+    const sharedPath = join(cacheRoot, sharedId);
+    await mkdir(sharedPath, { recursive: true });
+    const sharedGit = simpleGit(sharedPath);
+    await sharedGit.init();
+    await sharedGit.addConfig('user.name', 'Impact Flow Test');
+    await sharedGit.addConfig('user.email', 'test@impact-flow.local');
+    await writeFile(join(sharedPath, 'package.json'), '{"name":"@demo/shared"}\n');
+    await writeFile(
+      join(sharedPath, 'service.ts'),
+      'export class SharedService {\n  run() { return 1; }\n}\n',
+    );
+    await sharedGit.add('.');
+    await sharedGit.commit('base shared');
+    const baseCommit = (await sharedGit.revparse(['HEAD'])).trim();
+    await writeFile(
+      join(sharedPath, 'service.ts'),
+      'export class SharedService {\n  run() { return 2; }\n}\n',
+    );
+    await sharedGit.add('.');
+    await sharedGit.commit('change shared service');
+    const targetCommit = (await sharedGit.revparse(['HEAD'])).trim();
+
+    const consumerId = 'consumer-project';
+    const consumerPath = join(cacheRoot, consumerId);
+    await mkdir(consumerPath, { recursive: true });
+    const consumerGit = simpleGit(consumerPath);
+    await consumerGit.init();
+    await consumerGit.addConfig('user.name', 'Impact Flow Test');
+    await consumerGit.addConfig('user.email', 'test@impact-flow.local');
+    await writeFile(join(consumerPath, 'package.json'), '{"name":"@demo/consumer"}\n');
+    await writeFile(
+      join(consumerPath, 'consumer.ts'),
+      "import { SharedService } from '@demo/shared';\n" +
+        'export class ConsumerController {\n' +
+        '  constructor(private readonly service: SharedService) {}\n' +
+        '  execute() { return this.service.run(); }\n' +
+        '}\n',
+    );
+    await consumerGit.add('.');
+    await consumerGit.commit('add shared caller');
+    const consumerCommit = (await consumerGit.revparse(['HEAD'])).trim();
+
+    const analyzer = new TypeScriptSymbolAnalyzer(
+      new ConfigService({ REPOSITORY_CACHE_DIR: cacheRoot }),
+    );
+    const result = await analyzer.analyzeRange({
+      projectId: sharedId,
+      projectName: 'Shared Project',
+      baseCommit,
+      targetCommit,
+      relatedRepositories: [{
+        projectId: consumerId,
+        projectName: 'Consumer Project',
+        targetCommit: consumerCommit,
+      }],
+    });
+
+    expect(result.symbolImpacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          impactedSymbol: expect.objectContaining({
+            qualifiedName: 'ConsumerController.execute',
+            projectId: consumerId,
+            projectName: 'Consumer Project',
+          }),
+        }),
+      ]),
+    );
+    expect(result.symbolSummary).toContain('跨仓库影响');
   });
 });

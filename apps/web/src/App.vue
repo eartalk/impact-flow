@@ -794,7 +794,13 @@ onBeforeUnmount(() => {
                               {{ symbolChangeLabel(symbol.changeType) }}
                             </span>
                             <div>
-                              <strong>{{ symbol.qualifiedName }}</strong>
+                              <strong>
+                                <em
+                                  v-if="symbol.projectId && symbol.projectId !== project.id"
+                                  class="symbol-project-badge"
+                                >{{ symbol.projectName }}</em>
+                                {{ symbol.qualifiedName }}
+                              </strong>
                               <p>
                                 {{ symbolKindLabel(symbol.kind) }} ·
                                 {{ symbol.filePath }}:{{ symbol.startLine }}
@@ -829,6 +835,10 @@ onBeforeUnmount(() => {
                                 v-for="(node, index) in impact.callChain"
                                 :key="node.key"
                               >
+                                <em
+                                  v-if="node.projectId && node.projectId !== project.id"
+                                  class="symbol-project-badge"
+                                >{{ node.projectName }}</em>
                                 <code>{{ node.qualifiedName }}</code>
                                 <ArrowRight v-if="index < impact.callChain.length - 1" />
                               </template>

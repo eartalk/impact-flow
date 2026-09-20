@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { dirname, join, posix, resolve } from 'node:path';
+import { stat } from 'node:fs/promises';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import ts from 'typescript';
 import type {
@@ -30,17 +31,29 @@ type PendingCall = {
 };
 
 type ParsedFile = {
+  projectId: string;
+  projectName: string;
   path: string;
+  fileKey: string;
   symbols: CodeSymbolReference[];
   calls: PendingCall[];
   imports: Map<string, { source: string; imported: string }>;
   dependencyTypes: Map<string, string>;
+  implementations: Map<string, string[]>;
+};
+
+type SourceUnit = {
+  projectId: string;
+  projectName: string;
+  path: string;
+  source: string;
 };
 
 type RepositoryModel = {
   symbols: Map<string, CodeSymbolReference>;
   files: Map<string, ParsedFile>;
   reverseCalls: Map<string, Set<string>>;
+  projectAliases: Map<string, string>;
 };
 
 @Injectable()
@@ -49,8 +62,14 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
 
   async analyzeRange(input: {
     projectId: string;
+    projectName: string;
     baseCommit: string;
     targetCommit: string;
+    relatedRepositories?: Array<{
+      projectId: string;
+      projectName: string;
+      targetCommit: string;
+    }>;
   }): Promise<SymbolAnalysisResult> {
     const git = simpleGit(this.repositoryPath(input.projectId));
     const patch = await git.raw([
@@ -62,6 +81,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
       '--',
       '*.ts',
       '*.tsx',
+      '*.vue',
     ]);
     const diffs = this.parseDiff(patch);
     if (!diffs.length) return this.emptyResult();
@@ -79,22 +99,68 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
       git,
       input.targetCommit,
       orderedTargetPaths.slice(0, maxFiles),
+      input.projectId,
+      input.projectName,
     );
-    const targetModel = this.buildModel(targetSources);
+    const projectAliases = new Map<string, string>();
+    await this.registerProjectAlias(git, input.targetCommit, input.projectId, projectAliases);
+
+    let relatedProjectCount = 0;
+    const maxRelatedProjects = Number(
+      this.config.get('SYMBOL_ANALYSIS_MAX_RELATED_PROJECTS') ?? 5,
+    );
+    const relatedMaxFiles = Number(
+      this.config.get('SYMBOL_ANALYSIS_RELATED_MAX_FILES') ?? 500,
+    );
+    for (const related of (input.relatedRepositories ?? []).slice(0, maxRelatedProjects)) {
+      const repositoryPath = this.repositoryPath(related.projectId);
+      if (!(await this.exists(repositoryPath))) continue;
+      const relatedGit = simpleGit(repositoryPath);
+      try {
+        const relatedPaths = await this.listSourceFiles(relatedGit, related.targetCommit);
+        const relatedSources = await this.readSources(
+          relatedGit,
+          related.targetCommit,
+          relatedPaths.slice(0, relatedMaxFiles),
+          related.projectId,
+          related.projectName,
+        );
+        targetSources.push(...relatedSources);
+        await this.registerProjectAlias(
+          relatedGit,
+          related.targetCommit,
+          related.projectId,
+          projectAliases,
+        );
+        relatedProjectCount += 1;
+      } catch {
+        // Related repositories are best-effort and must not fail the primary analysis.
+      }
+    }
+    const targetModel = this.buildModel(targetSources, projectAliases);
 
     const basePaths = [...new Set(
       diffs.map((item) => item.oldPath).filter((path): path is string => Boolean(path)),
     )];
-    const baseSources = await this.readSources(git, input.baseCommit, basePaths);
-    const baseModel = this.buildModel(baseSources);
-    const symbolChanges = this.findChanges(diffs, baseModel, targetModel);
+    const baseSources = await this.readSources(
+      git,
+      input.baseCommit,
+      basePaths,
+      input.projectId,
+      input.projectName,
+    );
+    const baseModel = this.buildModel(baseSources, projectAliases);
+    const symbolChanges = this.findChanges(diffs, baseModel, targetModel, input.projectId);
     const symbolImpacts = this.findImpacts(symbolChanges, targetModel, 3);
     const analyzedFileCount = targetModel.files.size;
+    const crossRepositoryImpacts = symbolImpacts.filter(
+      (item) => item.impactedSymbol.projectId !== input.projectId,
+    ).length;
 
     return {
       symbolSummary: symbolChanges.length
-        ? `识别到 ${symbolChanges.length} 个变更 Symbol，追踪到 ${symbolImpacts.length} 个上游调用影响（已扫描 ${analyzedFileCount} 个 TypeScript 文件）`
-        : `TypeScript 文件存在变更，但未映射到可识别的代码 Symbol（已扫描 ${analyzedFileCount} 个文件）`,
+        ? `识别到 ${symbolChanges.length} 个变更 Symbol，追踪到 ${symbolImpacts.length} 个上游调用影响${crossRepositoryImpacts ? `，其中 ${crossRepositoryImpacts} 个跨仓库影响` : ''}（已扫描 ${analyzedFileCount} 个 TypeScript/Vue 文件、${relatedProjectCount} 个相关仓库）`
+        : `TypeScript/Vue 文件存在变更，但未映射到可识别的代码 Symbol（已扫描 ${analyzedFileCount} 个文件）`,
       symbolChanges,
       symbolImpacts,
     };
@@ -102,7 +168,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
 
   private emptyResult(): SymbolAnalysisResult {
     return {
-      symbolSummary: '本次变更不包含 TypeScript Symbol',
+      symbolSummary: '本次变更不包含 TypeScript/Vue Symbol',
       symbolChanges: [],
       symbolImpacts: [],
     };
@@ -122,7 +188,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
       .split(/\r?\n/)
       .map((path) => this.normalizePath(path))
       .filter((path) =>
-        /\.(ts|tsx)$/.test(path) &&
+        /\.(ts|tsx|vue)$/.test(path) &&
         !path.endsWith('.d.ts') &&
         !/(^|\/)(node_modules|dist|build|coverage|vendor|generated)(\/|$)/.test(path),
       );
@@ -132,8 +198,10 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     git: SimpleGit,
     commit: string,
     paths: string[],
-  ): Promise<Map<string, string>> {
-    const result = new Map<string, string>();
+    projectId: string,
+    projectName: string,
+  ): Promise<SourceUnit[]> {
+    const result: SourceUnit[] = [];
     const batchSize = 12;
     for (let index = 0; index < paths.length; index += batchSize) {
       const batch = paths.slice(index, index + batchSize);
@@ -141,51 +209,88 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
         batch.map(async (path) => {
           try {
             const content = await git.show([`${commit}:${path}`]);
-            return content.length <= 1_000_000 ? ([path, content] as const) : null;
+            return content.length <= 1_000_000
+              ? ({ projectId, projectName, path, source: content } satisfies SourceUnit)
+              : null;
           } catch {
             return null;
           }
         }),
       );
-      for (const item of contents) if (item) result.set(item[0], item[1]);
+      for (const item of contents) if (item) result.push(item);
     }
     return result;
   }
 
-  private buildModel(sources: Map<string, string>): RepositoryModel {
+  private buildModel(
+    sources: SourceUnit[],
+    projectAliases: Map<string, string>,
+  ): RepositoryModel {
     const files = new Map<string, ParsedFile>();
     const symbols = new Map<string, CodeSymbolReference>();
-    for (const [path, source] of sources) {
-      const parsed = this.parseSource(path, source);
-      files.set(path, parsed);
+    for (const source of sources) {
+      const parsed = this.parseSource(source);
+      files.set(parsed.fileKey, parsed);
       for (const symbol of parsed.symbols) symbols.set(symbol.key, symbol);
     }
 
     const reverseCalls = new Map<string, Set<string>>();
     for (const file of files.values()) {
       for (const call of file.calls) {
-        const target = this.resolveCall(call, file, files, symbols);
+        const target = this.resolveCall(
+          call,
+          file,
+          files,
+          symbols,
+          projectAliases,
+        );
         if (!target || target === call.callerKey) continue;
         const callers = reverseCalls.get(target) ?? new Set<string>();
         callers.add(call.callerKey);
         reverseCalls.set(target, callers);
       }
     }
-    return { symbols, files, reverseCalls };
+    this.linkInterfaceImplementations(
+      files,
+      symbols,
+      reverseCalls,
+      projectAliases,
+    );
+    return { symbols, files, reverseCalls, projectAliases };
   }
 
-  private parseSource(path: string, source: string): ParsedFile {
+  private parseSource(unit: SourceUnit): ParsedFile {
+    const { projectId, projectName, path } = unit;
+    const source = path.endsWith('.vue')
+      ? this.extractVueScript(unit.source)
+      : unit.source;
     const sourceFile = ts.createSourceFile(
       path,
       source,
       ts.ScriptTarget.Latest,
       true,
-      path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+      path.endsWith('.tsx') || path.endsWith('.vue')
+        ? ts.ScriptKind.TSX
+        : ts.ScriptKind.TS,
     );
     const symbols: CodeSymbolReference[] = [];
     const calls: PendingCall[] = [];
     const imports = new Map<string, { source: string; imported: string }>();
     const dependencyTypes = new Map<string, string>();
+    const implementations = new Map<string, string[]>();
+    const symbolFor = (
+      node: ts.Node,
+      qualifiedName: string,
+      kind: CodeSymbolKind,
+    ) => this.toSymbol(
+      projectId,
+      projectName,
+      path,
+      sourceFile,
+      node,
+      qualifiedName,
+      kind,
+    );
 
     for (const statement of sourceFile.statements) {
       if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
@@ -206,7 +311,11 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
 
       if (ts.isClassDeclaration(statement) && statement.name) {
         const className = statement.name.text;
-        symbols.push(this.toSymbol(path, sourceFile, statement, className, 'CLASS'));
+        symbols.push(symbolFor(statement, className, 'CLASS'));
+        const implementedTypes = statement.heritageClauses
+          ?.filter((clause) => clause.token === ts.SyntaxKind.ImplementsKeyword)
+          .flatMap((clause) => clause.types.map((type) => type.expression.getText())) ?? [];
+        if (implementedTypes.length) implementations.set(className, implementedTypes);
         for (const member of statement.members) {
           if (ts.isConstructorDeclaration(member)) {
             for (const parameter of member.parameters) {
@@ -222,9 +331,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
           if (ts.isMethodDeclaration(member) && member.name) {
             const name = this.nodeName(member.name);
             if (!name) continue;
-            const symbol = this.toSymbol(
-              path,
-              sourceFile,
+            const symbol = symbolFor(
               member,
               `${className}.${name}`,
               'METHOD',
@@ -234,9 +341,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
           } else if (ts.isPropertyDeclaration(member) && member.name) {
             const name = this.nodeName(member.name);
             if (!name) continue;
-            symbols.push(this.toSymbol(
-              path,
-              sourceFile,
+            symbols.push(symbolFor(
               member,
               `${className}.${name}`,
               'PROPERTY',
@@ -249,14 +354,12 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
 
       if (ts.isInterfaceDeclaration(statement)) {
         const interfaceName = statement.name.text;
-        symbols.push(this.toSymbol(path, sourceFile, statement, interfaceName, 'INTERFACE'));
+        symbols.push(symbolFor(statement, interfaceName, 'INTERFACE'));
         for (const member of statement.members) {
           if ((ts.isMethodSignature(member) || ts.isPropertySignature(member)) && member.name) {
             const name = this.nodeName(member.name);
             if (!name) continue;
-            symbols.push(this.toSymbol(
-              path,
-              sourceFile,
+            symbols.push(symbolFor(
               member,
               `${interfaceName}.${name}`,
               ts.isMethodSignature(member) ? 'METHOD' : 'PROPERTY',
@@ -267,12 +370,12 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
       }
 
       if (ts.isTypeAliasDeclaration(statement)) {
-        symbols.push(this.toSymbol(path, sourceFile, statement, statement.name.text, 'TYPE'));
+        symbols.push(symbolFor(statement, statement.name.text, 'TYPE'));
         continue;
       }
 
       if (ts.isFunctionDeclaration(statement) && statement.name) {
-        const symbol = this.toSymbol(path, sourceFile, statement, statement.name.text, 'FUNCTION');
+        const symbol = symbolFor(statement, statement.name.text, 'FUNCTION');
         symbols.push(symbol);
         this.collectCalls(statement, symbol.key, null, calls);
         continue;
@@ -285,9 +388,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
             declaration.initializer &&
             (ts.isArrowFunction(declaration.initializer) || ts.isFunctionExpression(declaration.initializer))
           ) {
-            const symbol = this.toSymbol(
-              path,
-              sourceFile,
+            const symbol = symbolFor(
               declaration,
               declaration.name.text,
               'FUNCTION',
@@ -298,7 +399,17 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
         }
       }
     }
-    return { path, symbols, calls, imports, dependencyTypes };
+    return {
+      projectId,
+      projectName,
+      path,
+      fileKey: this.fileKey(projectId, path),
+      symbols,
+      calls,
+      imports,
+      dependencyTypes,
+      implementations,
+    };
   }
 
   private collectCalls(
@@ -321,17 +432,29 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     file: ParsedFile,
     files: Map<string, ParsedFile>,
     symbols: Map<string, CodeSymbolReference>,
+    projectAliases: Map<string, string>,
   ): string | null {
     const expression = call.expression;
     if (ts.isIdentifier(expression)) {
-      const localKey = `${file.path}#${expression.text}`;
+      const localKey = this.symbolKey(file.projectId, file.path, expression.text);
       if (symbols.has(localKey)) return localKey;
-      return this.resolveImported(file, expression.text, null, files, symbols);
+      return this.resolveImported(
+        file,
+        expression.text,
+        null,
+        files,
+        symbols,
+        projectAliases,
+      );
     }
     if (!ts.isPropertyAccessExpression(expression)) return null;
     const methodName = expression.name.text;
     if (expression.expression.kind === ts.SyntaxKind.ThisKeyword && call.className) {
-      const key = `${file.path}#${call.className}.${methodName}`;
+      const key = this.symbolKey(
+        file.projectId,
+        file.path,
+        `${call.className}.${methodName}`,
+      );
       return symbols.has(key) ? key : null;
     }
     let owner: string | null = null;
@@ -349,18 +472,35 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
       if (type) {
         const importedType = file.imports.get(type);
         if (importedType?.source.startsWith('.')) {
-          const targetPath = this.resolveImportPath(file.path, importedType.source, files);
+          const targetPath = this.resolveImportPath(file, importedType.source, files);
           const importedName = importedType.imported === 'default' ? type : importedType.imported;
-          const exactKey = targetPath ? `${targetPath}#${importedName}.${methodName}` : null;
+          const exactKey = targetPath
+            ? this.symbolKey(file.projectId, targetPath, `${importedName}.${methodName}`)
+            : null;
           if (exactKey && symbols.has(exactKey)) return exactKey;
         }
-        const match = [...symbols.values()].find(
-          (symbol) => symbol.kind === 'METHOD' && symbol.qualifiedName === `${type}.${methodName}`,
+        const externalProjectId = importedType && !importedType.source.startsWith('.')
+          ? this.projectForImport(importedType.source, projectAliases)
+          : null;
+        const candidates = [...symbols.values()].filter(
+          (symbol) =>
+            symbol.kind === 'METHOD' &&
+            symbol.qualifiedName === `${type}.${methodName}` &&
+            (!externalProjectId || symbol.projectId === externalProjectId),
         );
+        const match = candidates.find((symbol) => symbol.projectId === file.projectId)
+          ?? (candidates.length === 1 ? candidates[0] : undefined);
         if (match) return match.key;
       }
     }
-    return this.resolveImported(file, owner, methodName, files, symbols);
+    return this.resolveImported(
+      file,
+      owner,
+      methodName,
+      files,
+      symbols,
+      projectAliases,
+    );
   }
 
   private resolveImported(
@@ -369,37 +509,205 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     memberName: string | null,
     files: Map<string, ParsedFile>,
     symbols: Map<string, CodeSymbolReference>,
+    projectAliases: Map<string, string>,
   ) {
     const binding = file.imports.get(localName);
-    if (!binding || !binding.source.startsWith('.')) return null;
-    const targetPath = this.resolveImportPath(file.path, binding.source, files);
-    if (!targetPath) return null;
+    if (!binding) return null;
     const importedName = binding.imported === 'default' ? localName : binding.imported;
     const qualifiedName = memberName ? `${importedName}.${memberName}` : importedName;
-    const key = `${targetPath}#${qualifiedName}`;
-    return symbols.has(key) ? key : null;
+    if (binding.source.startsWith('.')) {
+      const targetPath = this.resolveImportPath(file, binding.source, files);
+      if (!targetPath) return null;
+      const key = this.symbolKey(file.projectId, targetPath, qualifiedName);
+      return symbols.has(key) ? key : null;
+    }
+
+    const targetProjectId = this.projectForImport(binding.source, projectAliases);
+    if (!targetProjectId) return null;
+    const matches = [...symbols.values()].filter(
+      (symbol) =>
+        symbol.projectId === targetProjectId &&
+        (symbol.qualifiedName === qualifiedName || symbol.name === qualifiedName),
+    );
+    return matches.length === 1 ? matches[0].key : null;
   }
 
   private resolveImportPath(
-    sourceFile: string,
+    sourceFile: ParsedFile,
     specifier: string,
     files: Map<string, ParsedFile>,
   ) {
-    const base = this.normalizePath(posix.join(dirname(sourceFile).replace(/\\/g, '/'), specifier));
-    const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`];
-    return candidates.find((candidate) => files.has(candidate)) ?? null;
+    const base = this.normalizePath(
+      posix.join(dirname(sourceFile.path).replace(/\\/g, '/'), specifier),
+    );
+    const candidates = [
+      base,
+      `${base}.ts`,
+      `${base}.tsx`,
+      `${base}.vue`,
+      `${base}/index.ts`,
+      `${base}/index.tsx`,
+      `${base}/index.vue`,
+    ];
+    return candidates.find((candidate) =>
+      files.has(this.fileKey(sourceFile.projectId, candidate)),
+    ) ?? null;
+  }
+
+  private linkInterfaceImplementations(
+    files: Map<string, ParsedFile>,
+    symbols: Map<string, CodeSymbolReference>,
+    reverseCalls: Map<string, Set<string>>,
+    projectAliases: Map<string, string>,
+  ) {
+    for (const file of files.values()) {
+      for (const [className, interfaceNames] of file.implementations) {
+        const implementationMethods = file.symbols.filter(
+          (symbol) =>
+            symbol.kind === 'METHOD' &&
+            symbol.qualifiedName.startsWith(`${className}.`),
+        );
+        for (const interfaceName of interfaceNames) {
+          const interfaceSymbol = this.resolveTypeSymbol(
+            file,
+            interfaceName,
+            'INTERFACE',
+            files,
+            symbols,
+            projectAliases,
+          );
+          if (!interfaceSymbol) continue;
+          for (const implementationMethod of implementationMethods) {
+            const methodName = implementationMethod.name;
+            const interfaceMethod = [...symbols.values()].find(
+              (symbol) =>
+                symbol.projectId === interfaceSymbol.projectId &&
+                symbol.filePath === interfaceSymbol.filePath &&
+                symbol.kind === 'METHOD' &&
+                symbol.qualifiedName === `${interfaceSymbol.qualifiedName}.${methodName}`,
+            );
+            if (!interfaceMethod) continue;
+            this.addReverseEdge(
+              reverseCalls,
+              interfaceMethod.key,
+              implementationMethod.key,
+            );
+            this.addReverseEdge(
+              reverseCalls,
+              implementationMethod.key,
+              interfaceMethod.key,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  private resolveTypeSymbol(
+    file: ParsedFile,
+    rawTypeName: string,
+    kind: CodeSymbolKind,
+    files: Map<string, ParsedFile>,
+    symbols: Map<string, CodeSymbolReference>,
+    projectAliases: Map<string, string>,
+  ) {
+    const typeName = rawTypeName.replace(/<.*$/, '').split('.').at(-1) ?? rawTypeName;
+    const binding = file.imports.get(typeName);
+    if (binding?.source.startsWith('.')) {
+      const targetPath = this.resolveImportPath(file, binding.source, files);
+      const importedName = binding.imported === 'default' ? typeName : binding.imported;
+      const key = targetPath
+        ? this.symbolKey(file.projectId, targetPath, importedName)
+        : null;
+      const symbol = key ? symbols.get(key) : null;
+      if (symbol?.kind === kind) return symbol;
+    }
+    if (binding && !binding.source.startsWith('.')) {
+      const targetProjectId = this.projectForImport(binding.source, projectAliases);
+      const importedName = binding.imported === 'default' ? typeName : binding.imported;
+      const match = [...symbols.values()].find(
+        (symbol) =>
+          symbol.projectId === targetProjectId &&
+          symbol.kind === kind &&
+          symbol.qualifiedName === importedName,
+      );
+      if (match) return match;
+    }
+    const candidates = [...symbols.values()].filter(
+      (symbol) => symbol.kind === kind && symbol.qualifiedName === typeName,
+    );
+    return candidates.find((symbol) => symbol.projectId === file.projectId)
+      ?? (candidates.length === 1 ? candidates[0] : undefined);
+  }
+
+  private addReverseEdge(
+    reverseCalls: Map<string, Set<string>>,
+    targetKey: string,
+    callerKey: string,
+  ) {
+    const callers = reverseCalls.get(targetKey) ?? new Set<string>();
+    callers.add(callerKey);
+    reverseCalls.set(targetKey, callers);
+  }
+
+  private async registerProjectAlias(
+    git: SimpleGit,
+    commit: string,
+    projectId: string,
+    aliases: Map<string, string>,
+  ) {
+    aliases.set(projectId, projectId);
+    try {
+      const rawPackage = await git.show([`${commit}:package.json`]);
+      const packageName = (JSON.parse(rawPackage) as { name?: string }).name;
+      if (packageName) aliases.set(packageName, projectId);
+    } catch {
+      // A repository does not need a package.json to participate in local analysis.
+    }
+  }
+
+  private projectForImport(
+    source: string,
+    aliases: Map<string, string>,
+  ) {
+    const entries = [...aliases.entries()].sort((a, b) => b[0].length - a[0].length);
+    return entries.find(([alias]) => source === alias || source.startsWith(`${alias}/`))?.[1]
+      ?? null;
+  }
+
+  private extractVueScript(source: string) {
+    const masked = source.replace(/[^\r\n]/g, ' ').split('');
+    const scriptPattern = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+    for (const match of source.matchAll(scriptPattern)) {
+      if (/\bsrc\s*=/.test(match[1])) continue;
+      const full = match[0];
+      const content = match[2];
+      const contentOffset = full.indexOf('>') + 1;
+      const start = (match.index ?? 0) + contentOffset;
+      for (let index = 0; index < content.length; index += 1) {
+        masked[start + index] = content[index];
+      }
+    }
+    return masked.join('');
   }
 
   private findChanges(
     diffs: FileDiff[],
     base: RepositoryModel,
     target: RepositoryModel,
+    projectId: string,
   ): SymbolChange[] {
     const changes = new Map<string, SymbolChange>();
     for (const diff of diffs) {
       if (diff.newPath) {
-        const targetSymbols = target.files.get(diff.newPath)?.symbols ?? [];
-        const oldKeys = new Set(base.files.get(diff.oldPath ?? diff.newPath)?.symbols.map((item) => item.key));
+        const targetSymbols = target.files.get(
+          this.fileKey(projectId, diff.newPath),
+        )?.symbols ?? [];
+        const oldKeys = new Set(
+          base.files
+            .get(this.fileKey(projectId, diff.oldPath ?? diff.newPath))
+            ?.symbols.map((item) => item.key),
+        );
         for (const symbol of targetSymbols) {
           if (!this.intersects(symbol, diff.newRanges) && oldKeys.has(symbol.key)) continue;
           const changeType = oldKeys.has(symbol.key) ? 'MODIFIED' : 'ADDED';
@@ -407,10 +715,12 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
         }
       }
       if (diff.oldPath) {
-        const baseSymbols = base.files.get(diff.oldPath)?.symbols ?? [];
+        const baseSymbols = base.files.get(
+          this.fileKey(projectId, diff.oldPath),
+        )?.symbols ?? [];
         for (const symbol of baseSymbols) {
           const targetKey = diff.newPath
-            ? `${diff.newPath}#${symbol.qualifiedName}`
+            ? this.symbolKey(projectId, diff.newPath, symbol.qualifiedName)
             : symbol.key;
           if (target.symbols.has(targetKey)) continue;
           if (diff.oldRanges.length && !this.intersects(symbol, diff.oldRanges)) continue;
@@ -452,7 +762,9 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
             impactedSymbol: caller,
             depth,
             callChain,
-            reason: `通过 ${depth} 层调用依赖受影响`,
+            reason: caller.projectId !== change.projectId
+              ? `通过 ${depth} 层调用依赖产生跨仓库影响`
+              : `通过 ${depth} 层调用或接口实现关系受影响`,
           });
           queue.push({ key: callerKey, chain: callChain, depth });
         }
@@ -491,6 +803,8 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
   }
 
   private toSymbol(
+    projectId: string,
+    projectName: string,
     path: string,
     sourceFile: ts.SourceFile,
     node: ts.Node,
@@ -500,13 +814,15 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     const startLine = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
     const endLine = sourceFile.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
     return {
-      key: `${path}#${qualifiedName}`,
+      key: this.symbolKey(projectId, path, qualifiedName),
       name: qualifiedName.split('.').at(-1) ?? qualifiedName,
       qualifiedName,
       kind,
       filePath: path,
       startLine,
       endLine,
+      projectId,
+      projectName,
     };
   }
 
@@ -562,5 +878,26 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
 
   private normalizePath(path: string) {
     return path.replace(/\\/g, '/').replace(/^\.\//, '');
+  }
+
+  private fileKey(projectId: string, path: string) {
+    return `${projectId}::${path}`;
+  }
+
+  private symbolKey(
+    projectId: string,
+    path: string,
+    qualifiedName: string,
+  ) {
+    return `${this.fileKey(projectId, path)}#${qualifiedName}`;
+  }
+
+  private async exists(path: string) {
+    try {
+      await stat(path);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

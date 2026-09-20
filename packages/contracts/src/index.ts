@@ -36,6 +36,8 @@ export interface CodeSymbolReference {
   filePath: string;
   startLine: number;
   endLine: number;
+  projectId?: string;
+  projectName?: string;
 }
 
 export interface SymbolChange extends CodeSymbolReference {

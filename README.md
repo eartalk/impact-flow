@@ -53,6 +53,8 @@ VERSION_CHECK_ENABLED=true
 VERSION_CHECK_INTERVAL_MS=300000
 INSPECTION_LOG_RETENTION_DAYS=30
 SYMBOL_ANALYSIS_MAX_FILES=1500
+SYMBOL_ANALYSIS_MAX_RELATED_PROJECTS=5
+SYMBOL_ANALYSIS_RELATED_MAX_FILES=500
 DATABASE_HOST=127.0.0.1
 DATABASE_PORT=3306
 DATABASE_NAME=impact_flow
@@ -101,6 +103,6 @@ pnpm build
 ## 下一阶段
 
 1. 增加钉钉新推送与巡检失败通知。
-2. 扩展 Vue SFC、继承/接口实现关系与跨仓库调用链识别。
+2. 扩展 HTTP/RPC 路由级跨仓库调用链和动态调用识别。
 3. 接入可配置的 AI 模型，对确定性风险规则的结果进行补充说明。
 4. 将应用内后台队列升级为独立 Worker，支持并发限制与任务重试。

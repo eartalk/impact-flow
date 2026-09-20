@@ -125,10 +125,19 @@ export class AnalysesService implements OnApplicationBootstrap {
       const impact = this.impactAnalyzer.analyze(result);
       let symbolAnalysis;
       try {
+        const relatedRepositories = (await this.projects.findAll())
+          .filter((item) => item.id !== project.id && item.detectedCommit)
+          .map((item) => ({
+            projectId: item.id,
+            projectName: item.name,
+            targetCommit: item.detectedCommit!,
+          }));
         symbolAnalysis = await this.symbols.analyzeRange({
           projectId: project.id,
+          projectName: project.name,
           baseCommit: task.baseCommit,
           targetCommit: task.targetCommit,
+          relatedRepositories,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

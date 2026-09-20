@@ -1524,6 +1524,22 @@ input:focus-visible {
   font-size: 10px;
 }
 
+.symbol-project-badge {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  color: #146b78;
+  background: #e6f5f7;
+  border: 1px solid #b9dfe4;
+  font: 600 9px/1.4 var(--font-ui);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.symbol-change-list strong .symbol-project-badge {
+  margin-right: 5px;
+  vertical-align: 1px;
+}
+
 .symbol-chain-path svg {
   width: 11px;
   flex: 0 0 11px;

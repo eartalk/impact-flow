@@ -14,7 +14,13 @@ export interface SymbolAnalysisResult {
 export interface SymbolAnalyzerGateway {
   analyzeRange(input: {
     projectId: string;
+    projectName: string;
     baseCommit: string;
     targetCommit: string;
+    relatedRepositories?: Array<{
+      projectId: string;
+      projectName: string;
+      targetCommit: string;
+    }>;
   }): Promise<SymbolAnalysisResult>;
 }
