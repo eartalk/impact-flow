@@ -64,6 +64,11 @@ AI_ANALYSIS_TIMEOUT_MS=90000
 AI_ANALYSIS_MAX_FILES=80
 AI_ANALYSIS_MAX_SYMBOLS=50
 AI_CONFIG_ENCRYPTION_KEY=replace-with-a-stable-private-secret
+ANALYSIS_WORKER_ENABLED=true
+ANALYSIS_WORKER_CONCURRENCY=2
+ANALYSIS_WORKER_POLL_INTERVAL_MS=1000
+ANALYSIS_TASK_TIMEOUT_MS=600000
+ANALYSIS_RETRY_BASE_MS=5000
 DATABASE_HOST=127.0.0.1
 DATABASE_PORT=3306
 DATABASE_NAME=impact_flow
@@ -77,7 +82,7 @@ DATABASE_PASSWORD_BASE64=base64-encoded-admin-password
 DATABASE_PASSWORD_FILE=/run/secrets/mysql-root-password
 ```
 
-数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/018_add_analysis_cancelled_status.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段；迁移 017 会回填工作空间所有者与用户默认空间，并在工作空间成员表上建立单所有者约束，执行前同样建议先备份；迁移 018 只是把分析任务状态列的注释补上 `CANCELLED`（列类型本就是 varchar，无需改表）。迁移 019 是已经停用的邀请功能历史脚本，仅为兼容已执行过该迁移的环境而保留，新环境无需执行。
+数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/020_add_analysis_worker_reliability.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段；迁移 017 会回填工作空间所有者与用户默认空间，并在工作空间成员表上建立单所有者约束，执行前同样建议先备份；迁移 018 只是把分析任务状态列的注释补上 `CANCELLED`（列类型本就是 varchar，无需改表）；迁移 019 是已经停用的邀请功能历史脚本，仅为兼容已执行过该迁移的环境而保留，新环境无需执行；迁移 020 增加 Worker 租约、重试次数和下次执行时间字段。
 
 增量脚本需要按序号手工执行，且**必须显式指定连接字符集**，否则中文表名注释与列注释会被写成乱码（Windows 下 mysql 客户端默认不是 utf8mb4）：
 
@@ -86,6 +91,13 @@ mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/015_merge_pe
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/016_add_workspace_automation_policy.sql
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/017_add_workspace_management.sql
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/018_add_analysis_cancelled_status.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/020_add_analysis_worker_reliability.sql
+```
+
+也可以使用读取项目 `.env` 且不会在命令行暴露密码的迁移命令：
+
+```bash
+pnpm --filter @impact-flow/api migrate 020_add_analysis_worker_reliability.sql
 ```
 
 迁移 017 执行前会校验每个工作空间恰好有一个 OWNER，若存在「无 OWNER」或「多 OWNER」的异常数据会直接中止并提示人工修复，不会写入半成品结构。
@@ -99,6 +111,8 @@ pnpm --filter @impact-flow/api verify:workspace-schema
 也可以用 `SHOW FULL COLUMNS FROM <table>` 或查询 `information_schema.COLUMNS` 的 `COLUMN_COMMENT` 手工复核注释是否正常。
 
 首次打开页面会进入系统初始化，创建首位工作空间所有者。初始化完成后，登录页支持注册新账号；注册时必须同时创建首个工作空间，账号与工作空间在同一事务内写入，注册人自动成为 OWNER 并直接登录。所有者或管理员也可以在成员管理中创建当前工作空间成员。登录会话保存在 HttpOnly Cookie 中，项目、AI 配置和通知配置均按工作空间隔离。
+
+公开部署时应在反向代理或网关层对 `POST /api/auth/register` 与 `POST /api/auth/login` 配置请求频率限制；当前应用层负责输入校验、密码哈希和同源校验，不内置验证码服务。
 
 ## 工作空间作用域约定
 
@@ -227,6 +241,10 @@ Symbol 分析支持 TypeScript、TSX 与 Vue SFC，能够识别 NestJS `@Control
 AI 分析默认关闭，并与变更分析分开执行。可在“AI 配置”页维护多条 OpenAI Chat Completions 或 Anthropic Messages 兼容接口，并选择一条默认启用配置。API Key 使用 `AI_CONFIG_ENCRYPTION_KEY`（未配置时回退数据库密码材料）派生密钥加密保存，页面只返回末四位。模型接收提交摘要、文件元数据、Symbol 调用链以及受控 Git Diff 证据：最多 24 个文本文件、单文件 5000 字符、总计 40000 字符；环境文件、证书、锁文件、构建产物和疑似密钥值会被过滤或脱敏。调用失败不会影响变更分析任务完成。
 
 基础配置中的“待检测通知”支持启停和钉钉群机器人 Webhook。巡检发现待检测提交后发送通知，并通过项目与目标 Commit 去重；发送失败不会影响巡检结果，下次巡检会继续重试。Webhook 使用与 AI API Key 相同的加密材料保存，接口只返回掩码。
+
+## 分析任务 Worker
+
+变更分析由数据库持久化队列驱动。Worker 使用 `FOR UPDATE SKIP LOCKED` 原子抢占到期任务，因此多个 API 实例可以并行运行且不会重复领取同一任务。任务租约超过执行超时时间后可被重新抢占；单次失败按指数退避重新进入 `READY`，默认执行 3 次后转为最终 `FAILED`。完成写入会校验 `worker_id`，已经超时的迟到结果不能覆盖新一轮任务状态或推进项目分析基线。
 
 每次通知投递都会写入 `pending_notification_delivery`（成功与失败都记录），包含渠道、第几次尝试、失败错误码与原因。该表同时承担去重职责：`delivered_commit` 是只在投递成功时才写入 `<target_commit>` 的生成列，配合唯一键 `(project_id, delivered_commit)` 借助 MySQL「NULL 不参与唯一性比较」的特性，实现同一服务同一提交最多成功通知一次，而失败的尝试可以持续追加。失败原因取自钉钉返回的 `errcode`/`errmsg`，网络异常与非法地址分别归类为 `NETWORK`、`INVALID_WEBHOOK`。
 
