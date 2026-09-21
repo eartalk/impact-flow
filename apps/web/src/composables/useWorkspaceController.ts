@@ -3,6 +3,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import type {
   AnalysisTask,
   AnalysisExecutionLog,
+  AuditLog,
   AutomationConfig,
   AiProviderConfig,
   AiProviderConnectionTest,
@@ -16,10 +17,24 @@ import type {
   Project,
   RepositoryConnectionTest,
   AuthSession,
+  CreateWorkspaceInput,
   CreateWorkspaceMemberInput,
+  RegisterInput,
+  WorkspaceCreationPolicy,
   WorkspaceMember,
+  WorkspaceOverview,
+  WorkspaceRole,
 } from "@impact-flow/contracts";
-import { api } from "../api";
+import { api, bumpWorkspaceGeneration, WorkspaceSwitchedError } from "../api";
+
+/**
+ * 统一错误提示。
+ * 切换工作空间导致的响应丢弃属于预期行为，静默忽略，不打扰用户。
+ */
+function notifyError(error: unknown, fallback: string) {
+  if (error instanceof WorkspaceSwitchedError) return;
+  ElMessage.error(error instanceof Error ? error.message : fallback);
+}
 
 export function useWorkspaceController() {
 const projects = ref<Project[]>([]);
@@ -30,7 +45,20 @@ type LogsTab = "CHANGE_ANALYSIS" | "AI_ANALYSIS" | "NOTIFICATION";
 
 const LOGS_PAGE_SIZE = 10;
 
-const activeView = ref<"analysis" | "services" | "base-config" | "logs">("analysis");
+type WorkspaceSettingsTab = "profile" | "audit" | "danger";
+
+type ActiveView =
+  | "analysis"
+  | "services"
+  | "base-config"
+  | "logs"
+  | "members"
+  | "workspace-settings";
+
+type AuthMode = "login" | "register-account" | "register-workspace";
+
+const activeView = ref<ActiveView>("analysis");
+const workspaceSettingsTab = ref<WorkspaceSettingsTab>("profile");
 const editingProjectId = ref<string | null>(null);
 const savingProject = ref(false);
 const detectingProjectId = ref<string | null>(null);
@@ -80,11 +108,39 @@ const savingAutomationConfig = ref(false);
 const authLoading = ref(true);
 const authSubmitting = ref(false);
 const bootstrapRequired = ref(false);
+const authMode = ref<AuthMode>("login");
 const currentSession = ref<AuthSession | null>(null);
-const membersVisible = ref(false);
 const membersLoading = ref(false);
 const members = ref<WorkspaceMember[]>([]);
 const memberCreating = ref(false);
+const removingMemberId = ref<string | null>(null);
+const disablingMemberId = ref<string | null>(null);
+const resetPasswordVisible = ref(false);
+const resetPasswordForm = reactive({ userId: "", password: "" });
+const resettingPassword = ref(false);
+const auditLogs = ref<AuditLog[]>([]);
+const auditLoading = ref(false);
+const auditFilters = reactive<{ action: string; operatorId: string }>({
+  action: "",
+  operatorId: "",
+});
+const auditPage = ref(1);
+const auditTotal = ref(0);
+const auditTotalPages = ref(1);
+const workspaces = ref<WorkspaceOverview[]>([]);
+const workspacesLoading = ref(false);
+const workspaceCreationPolicy = ref<WorkspaceCreationPolicy>({
+  mode: "ANY_USER",
+  allowed: true,
+});
+const switchingWorkspaceId = ref<string | null>(null);
+const workspaceDialogVisible = ref(false);
+const savingWorkspace = ref(false);
+
+const savingWorkspaceSettings = ref(false);
+const archivingWorkspace = ref(false);
+const restoringWorkspace = ref(false);
+const archiveConfirmName = ref("");
 let projectRefreshTimer: ReturnType<typeof setInterval> | undefined;
 let analysisPollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -120,6 +176,17 @@ const automationForm = reactive({
 });
 
 const loginForm = reactive({ username: "", password: "" });
+const registerAccountForm = reactive({
+  displayName: "",
+  username: "",
+  password: "",
+  confirmPassword: "",
+});
+const registerWorkspaceForm = reactive({
+  name: "",
+  code: "",
+  description: "",
+});
 const bootstrapForm = reactive({
   username: "admin",
   password: "",
@@ -132,6 +199,14 @@ const memberForm = reactive<CreateWorkspaceMemberInput>({
   displayName: "",
   role: "MEMBER",
 });
+
+const workspaceForm = reactive<CreateWorkspaceInput>({
+  name: "",
+  code: "",
+  description: "",
+});
+
+const workspaceSettingsForm = reactive({ name: "", description: "" });
 
 const canManageMembers = computed(() =>
   ["OWNER", "ADMIN"].includes(currentSession.value?.workspace.role ?? ""),
@@ -172,14 +247,15 @@ async function initializeAuth() {
     if (!status.required) {
       try {
         currentSession.value = await api.getCurrentSession();
-        await loadData();
+        await Promise.all([loadData(), loadWorkspaces()]);
+        void loadWorkspaceCreationPolicy();
         startBackgroundTasks();
       } catch {
         currentSession.value = null;
       }
     }
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "认证服务不可用");
+    notifyError(error, "认证服务不可用");
   } finally {
     authLoading.value = false;
   }
@@ -194,10 +270,101 @@ async function submitAuth() {
     bootstrapRequired.value = false;
     loginForm.password = "";
     bootstrapForm.password = "";
-    await loadData();
+    await Promise.all([loadData(), loadWorkspaces()]);
+    void loadWorkspaceCreationPolicy();
     startBackgroundTasks();
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "登录失败");
+    notifyError(error, "登录失败");
+  } finally {
+    authSubmitting.value = false;
+  }
+}
+
+function openRegistration() {
+  authMode.value = "register-account";
+  loginForm.password = "";
+}
+
+function showLogin() {
+  authMode.value = "login";
+}
+
+async function continueRegistration() {
+  const username = registerAccountForm.username.trim();
+  if (!registerAccountForm.displayName.trim()) {
+    ElMessage.warning("请输入显示名称");
+    return;
+  }
+  if (!/^[a-zA-Z0-9_.@-]{3,100}$/.test(username)) {
+    ElMessage.warning("账号需为 3-100 位字母、数字或 . _ @ -");
+    return;
+  }
+  if (registerAccountForm.password.length < 8) {
+    ElMessage.warning("密码至少需要 8 个字符");
+    return;
+  }
+  if (registerAccountForm.password !== registerAccountForm.confirmPassword) {
+    ElMessage.warning("两次输入的密码不一致");
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      "账号信息已填写完成，是否继续新建工作空间？",
+      "继续完成注册",
+      {
+        confirmButtonText: "继续新建工作空间",
+        cancelButtonText: "暂不创建",
+        type: "info",
+      },
+    );
+    if (!registerWorkspaceForm.code) {
+      const code = username
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      registerWorkspaceForm.code = `${code || "team"}-workspace`.slice(0, 100);
+    }
+    authMode.value = "register-workspace";
+  } catch {
+    ElMessage.info("账号信息已保留，创建工作空间后即可完成注册");
+  }
+}
+
+function backToRegisterAccount() {
+  authMode.value = "register-account";
+}
+
+async function submitRegistration() {
+  if (!registerWorkspaceForm.name.trim()) {
+    ElMessage.warning("请输入工作空间名称");
+    return;
+  }
+  if (!/^[a-z0-9][a-z0-9-]{1,99}$/.test(registerWorkspaceForm.code.trim())) {
+    ElMessage.warning("工作空间编码需为 2-100 位小写字母、数字或连字符");
+    return;
+  }
+
+  authSubmitting.value = true;
+  const input: RegisterInput = {
+    username: registerAccountForm.username,
+    password: registerAccountForm.password,
+    displayName: registerAccountForm.displayName,
+    workspaceName: registerWorkspaceForm.name,
+    workspaceCode: registerWorkspaceForm.code,
+    workspaceDescription: registerWorkspaceForm.description || undefined,
+  };
+  try {
+    currentSession.value = await api.register(input);
+    registerAccountForm.password = "";
+    registerAccountForm.confirmPassword = "";
+    authMode.value = "login";
+    await Promise.all([loadData(), loadWorkspaces()]);
+    void loadWorkspaceCreationPolicy();
+    startBackgroundTasks();
+    ElMessage.success("账号和工作空间已创建");
+  } catch (error) {
+    notifyError(error, "注册失败");
   } finally {
     authSubmitting.value = false;
   }
@@ -209,18 +376,251 @@ async function logout() {
   } finally {
     stopBackgroundTasks();
     currentSession.value = null;
-    projects.value = [];
-    analyses.value = [];
+    resetWorkspaceScopedState();
+    workspaces.value = [];
+    authMode.value = "login";
   }
 }
 
+async function loadWorkspaces() {
+  workspacesLoading.value = true;
+  try {
+    workspaces.value = await api.listWorkspaces();
+  } catch (error) {
+    notifyError(error, "工作空间加载失败");
+  } finally {
+    workspacesLoading.value = false;
+  }
+}
+
+async function loadWorkspaceCreationPolicy() {
+  try {
+    workspaceCreationPolicy.value = await api.getWorkspaceCreationPolicy();
+  } catch (error) {
+    // 拿不到策略时保守处理：不展示创建入口，但不影响页面其他功能
+    workspaceCreationPolicy.value = { mode: "DISABLED", allowed: false };
+    notifyError(error, "工作空间创建策略加载失败");
+  }
+}
+
+/**
+ * 切换工作空间后必须清空所有按空间隔离的页面状态。
+ * 任何残留都可能让用户在新空间看到旧空间的数据。
+ */
+function resetWorkspaceScopedState() {
+  stopBackgroundTasks();
+  projects.value = [];
+  analyses.value = [];
+  analysisDetails.value = {};
+  expandedProjectIds.value = [];
+  expandedDetailSections.value = [];
+  connectionResults.value = {};
+  detectingProjectId.value = null;
+  rerunningProjectId.value = null;
+  startingAiProjectId.value = null;
+  testingConnectionId.value = null;
+  detailLoadingProjectId.value = null;
+  inspectionLogs.value = [];
+  inspectionLogTotal.value = 0;
+  inspectionLogPage.value = 1;
+  inspectionLogTotalPages.value = 1;
+  inspectionLogVisible.value = false;
+  analysisLogs.value = [];
+  deliveryLogs.value = [];
+  logsProjectId.value = "";
+  logsStatus.value = "";
+  logsPage.value = 1;
+  logsTotal.value = 0;
+  logsTotalPages.value = 1;
+  aiConfigs.value = [];
+  aiConnectionResults.value = {};
+  aiConfigDialogVisible.value = false;
+  pendingNotificationConfig.value = null;
+  automationConfig.value = null;
+  members.value = [];
+  auditLogs.value = [];
+  auditTotal.value = 0;
+  auditPage.value = 1;
+  auditTotalPages.value = 1;
+  auditFilters.action = "";
+  auditFilters.operatorId = "";
+  workspaceSettingsTab.value = "profile";
+}
+
+/**
+ * 切换工作空间。
+ *
+ * 关键顺序：先停轮询 → 递增 generation 使在途响应全部失效 → 再发切换请求 →
+ * 清空旧状态 → 加载新空间数据 → 重启轮询。
+ * generation 必须在切换请求之前递增，否则旧空间在途请求的响应会覆盖新状态。
+ */
+async function switchWorkspace(target: WorkspaceOverview) {
+  if (switchingWorkspaceId.value) return;
+  if (target.id === currentSession.value?.workspace.id) return;
+
+  switchingWorkspaceId.value = target.id;
+  stopBackgroundTasks();
+  bumpWorkspaceGeneration();
+  try {
+    const session = await api.switchWorkspace(target.id);
+    currentSession.value = session;
+    resetWorkspaceScopedState();
+    activeView.value = "analysis";
+    await Promise.all([loadData(), loadWorkspaces()]);
+    startBackgroundTasks();
+    ElMessage.success(`已切换到「${session.workspace.name}」`);
+  } catch (error) {
+    notifyError(error, "切换工作空间失败");
+    // 切换失败时用服务端真实会话兜底，避免前端状态与 Cookie 不一致
+    try {
+      currentSession.value = await api.getCurrentSession();
+      await loadData();
+      startBackgroundTasks();
+    } catch {
+      currentSession.value = null;
+    }
+  } finally {
+    switchingWorkspaceId.value = null;
+  }
+}
+
+function openCreateWorkspace() {
+  workspaceForm.name = "";
+  workspaceForm.code = "";
+  workspaceForm.description = "";
+  workspaceDialogVisible.value = true;
+}
+
+async function createWorkspace() {
+  savingWorkspace.value = true;
+  stopBackgroundTasks();
+  bumpWorkspaceGeneration();
+  try {
+    const { workspace } = await api.createWorkspace({
+      name: workspaceForm.name,
+      code: workspaceForm.code,
+      description: workspaceForm.description || undefined,
+    });
+    currentSession.value = await api.getCurrentSession();
+    resetWorkspaceScopedState();
+    workspaceDialogVisible.value = false;
+    activeView.value = "analysis";
+    await Promise.all([loadData(), loadWorkspaces()]);
+    startBackgroundTasks();
+    ElMessage.success(`工作空间「${workspace.name}」已创建并切换`);
+  } catch (error) {
+    notifyError(error, "创建工作空间失败");
+    startBackgroundTasks();
+  } finally {
+    savingWorkspace.value = false;
+  }
+}
+
+function openWorkspaceSettings(tab: WorkspaceSettingsTab = "profile") {
+  const current = workspaces.value.find(
+    (item) => item.id === currentSession.value?.workspace.id,
+  );
+  workspaceSettingsForm.name = current?.name ?? currentSession.value?.workspace.name ?? "";
+  workspaceSettingsForm.description = current?.description ?? "";
+  activeView.value = "workspace-settings";
+  workspaceSettingsTab.value = tab;
+  // 审计日志仅管理者可见，普通成员切进来时自动落回基本信息
+  if (tab === "audit" && !canManageWorkspace.value) {
+    workspaceSettingsTab.value = "profile";
+  }
+  if (workspaceSettingsTab.value === "audit" && !auditLogs.value.length) {
+    void loadAuditLogs(true);
+  }
+}
+
+function changeWorkspaceSettingsTab(tab: WorkspaceSettingsTab) {
+  workspaceSettingsTab.value = tab;
+  if (tab === "audit" && !auditLogs.value.length) {
+    void loadAuditLogs(true);
+  }
+}
+
+async function saveWorkspaceSettings() {
+  savingWorkspaceSettings.value = true;
+  try {
+    await api.updateCurrentWorkspace({
+      name: workspaceSettingsForm.name,
+      description: workspaceSettingsForm.description,
+    });
+    await Promise.all([loadWorkspaces(), refreshCurrentSession()]);
+    ElMessage.success("工作空间信息已更新");
+  } catch (error) {
+    notifyError(error, "更新工作空间失败");
+  } finally {
+    savingWorkspaceSettings.value = false;
+  }
+}
+
+async function refreshCurrentSession() {
+  try {
+    currentSession.value = await api.getCurrentSession();
+  } catch (error) {
+    notifyError(error, "会话刷新失败");
+  }
+}
+
+/** 当前会话所在工作空间是否已归档（只读管理态） */
+const isCurrentWorkspaceArchived = computed(
+  () => currentSession.value?.workspace.status === "ARCHIVED",
+);
+
+async function archiveWorkspace() {
+  const name = currentSession.value?.workspace.name ?? "";
+  if (archiveConfirmName.value.trim() !== name) {
+    ElMessage.warning(`请输入工作空间名称「${name}」以确认归档`);
+    return;
+  }
+  archivingWorkspace.value = true;
+  try {
+    await api.archiveCurrentWorkspace();
+    await Promise.all([loadWorkspaces(), refreshCurrentSession()]);
+    archiveConfirmName.value = "";
+    ElMessage.success("工作空间已归档，进入只读状态");
+  } catch (error) {
+    notifyError(error, "归档失败");
+  } finally {
+    archivingWorkspace.value = false;
+  }
+}
+
+async function restoreWorkspace() {
+  restoringWorkspace.value = true;
+  try {
+    await api.restoreWorkspace(currentSession.value!.workspace.id);
+    await Promise.all([loadWorkspaces(), refreshCurrentSession()]);
+    ElMessage.success("工作空间已恢复");
+  } catch (error) {
+    notifyError(error, "恢复失败");
+  } finally {
+    restoringWorkspace.value = false;
+  }
+}
+
+const currentWorkspace = computed(
+  () =>
+    workspaces.value.find(
+      (item) => item.id === currentSession.value?.workspace.id,
+    ) ?? null,
+);
+
+const canManageWorkspace = computed(() => {
+  const role = currentSession.value?.workspace.role;
+  return role === "OWNER" || role === "ADMIN";
+});
+
 async function openMembers() {
-  membersVisible.value = true;
+  if (!canManageMembers.value) return;
+  activeView.value = "members";
   membersLoading.value = true;
   try {
-    members.value = await api.listMembers();
+    await refreshMembers();
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "成员加载失败");
+    notifyError(error, "成员加载失败");
   } finally {
     membersLoading.value = false;
   }
@@ -229,15 +629,15 @@ async function openMembers() {
 async function createMember() {
   if (!memberForm.displayName.trim()) {
     ElMessage.warning("请填写成员显示名称");
-    return;
+    return false;
   }
   if (!/^[a-zA-Z0-9_.@-]{3,100}$/.test(memberForm.username.trim())) {
     ElMessage.warning("登录账号至少 3 位，只能使用字母、数字及 . _ @ -");
-    return;
+    return false;
   }
   if (memberForm.password.length < 8) {
     ElMessage.warning("成员初始密码至少需要 8 个字符");
-    return;
+    return false;
   }
   memberCreating.value = true;
   try {
@@ -250,11 +650,174 @@ async function createMember() {
       role: "MEMBER",
     });
     ElMessage.success("成员已创建");
+    return true;
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "成员创建失败");
+    notifyError(error, "成员创建失败");
+    return false;
   } finally {
     memberCreating.value = false;
   }
+}
+
+async function refreshMembers() {
+  members.value = await api.listMembers();
+}
+
+async function removeMember(member: WorkspaceMember) {
+  try {
+    await ElMessageBox.confirm(
+      `移除后「${member.displayName}」将立即失去本工作空间的访问权限，并被迫重新登录。`,
+      "移除成员",
+      { confirmButtonText: "确认移除", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+  removingMemberId.value = member.userId;
+  try {
+    const result = await api.removeMember(member.userId);
+    await refreshMembers();
+    ElMessage.success(
+      result.revokedSessions > 0
+        ? `已移除该成员，并撤销 ${result.revokedSessions} 个登录会话`
+        : "已移除该成员",
+    );
+  } catch (error) {
+    notifyError(error, "移除成员失败");
+  } finally {
+    removingMemberId.value = null;
+  }
+}
+
+async function disableMember(member: WorkspaceMember) {
+  try {
+    await ElMessageBox.confirm(
+      `停用后「${member.displayName}」将无法登录，其在所有工作空间下的会话都会被撤销。`,
+      "停用账号",
+      { confirmButtonText: "确认停用", cancelButtonText: "取消", type: "warning" },
+    );
+  } catch {
+    return;
+  }
+  disablingMemberId.value = member.userId;
+  try {
+    const result = await api.disableMember(member.userId);
+    await refreshMembers();
+    ElMessage.success(
+      result.revokedSessions > 0
+        ? `账号已停用，撤销 ${result.revokedSessions} 个会话`
+        : "账号已停用",
+    );
+  } catch (error) {
+    notifyError(error, "停用失败");
+  } finally {
+    disablingMemberId.value = null;
+  }
+}
+
+async function restoreMember(member: WorkspaceMember) {
+  try {
+    await api.restoreMember(member.userId);
+    await refreshMembers();
+    ElMessage.success("账号已恢复");
+  } catch (error) {
+    notifyError(error, "恢复失败");
+  }
+}
+
+function openResetPassword(member: WorkspaceMember) {
+  resetPasswordForm.userId = member.userId;
+  resetPasswordForm.password = "";
+  resetPasswordVisible.value = true;
+}
+
+async function submitResetPassword() {
+  if (resetPasswordForm.password.length < 8) {
+    ElMessage.warning("新密码至少 8 位");
+    return;
+  }
+  resettingPassword.value = true;
+  try {
+    await api.resetMemberPassword(resetPasswordForm.userId, resetPasswordForm.password);
+    resetPasswordVisible.value = false;
+    resetPasswordForm.password = "";
+    ElMessage.success("密码已重置，对方需要重新登录");
+  } catch (error) {
+    notifyError(error, "重置密码失败");
+  } finally {
+    resettingPassword.value = false;
+  }
+}
+
+async function loadAuditLogs(resetPage = false) {
+  if (resetPage) auditPage.value = 1;
+  auditLoading.value = true;
+  try {
+    const result = await api.listAuditLogs({
+      page: auditPage.value,
+      pageSize: 20,
+      action: auditFilters.action || undefined,
+      operatorId: auditFilters.operatorId || undefined,
+    });
+    auditLogs.value = result.items;
+    auditTotal.value = result.total;
+    auditTotalPages.value = result.totalPages;
+  } catch (error) {
+    notifyError(error, "审计日志加载失败");
+  } finally {
+    auditLoading.value = false;
+  }
+}
+
+function changeAuditPage(page: number) {
+  if (page < 1 || page > auditTotalPages.value) return;
+  auditPage.value = page;
+  void loadAuditLogs();
+}
+
+function resetAuditFilters() {
+  auditFilters.action = "";
+  auditFilters.operatorId = "";
+  void loadAuditLogs(true);
+}
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  USER_LOGIN: "登录",
+  USER_LOGOUT: "退出登录",
+  SYSTEM_BOOTSTRAPPED: "系统初始化",
+  WORKSPACE_CREATED: "创建工作空间",
+  WORKSPACE_UPDATED: "修改工作空间",
+  WORKSPACE_SWITCHED: "切换工作空间",
+  MEMBER_CREATED: "创建成员",
+  MEMBER_REMOVED: "移除成员",
+  MEMBER_ROLE_UPDATED: "调整成员角色",
+};
+
+const auditActionOptions = computed(() =>
+  Object.entries(AUDIT_ACTION_LABELS).map(([value, label]) => ({ value, label })),
+);
+
+function auditActionLabel(action: string) {
+  return AUDIT_ACTION_LABELS[action] ?? action;
+}
+
+function auditDetailText(detail: Record<string, unknown> | null) {
+  if (!detail) return "—";
+  const parts = Object.entries(detail)
+    .filter(([, value]) => value !== null && value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`);
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+const ROLE_LABELS: Record<WorkspaceRole, string> = {
+  OWNER: "所有者",
+  ADMIN: "管理员",
+  MEMBER: "成员",
+  VIEWER: "只读",
+};
+
+function roleLabel(role: WorkspaceRole) {
+  return ROLE_LABELS[role] ?? role;
 }
 
 const latestAnalysisByProject = computed(() => {
@@ -276,7 +839,7 @@ async function loadData() {
       api.listAnalyses(),
     ]);
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     loading.value = false;
   }
@@ -287,7 +850,7 @@ async function loadAiConfigs() {
   try {
     aiConfigs.value = await api.listAiConfigs();
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     aiConfigLoading.value = false;
   }
@@ -301,7 +864,7 @@ async function loadPendingNotificationConfig() {
     pendingNotificationForm.enabled = config.enabled;
     pendingNotificationForm.dingTalkWebhook = "";
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     pendingNotificationLoading.value = false;
   }
@@ -317,7 +880,7 @@ async function loadAutomationConfig() {
       config.autoChangeAnalysisEnabled;
     automationForm.autoAiAnalysisEnabled = config.autoAiAnalysisEnabled;
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     automationConfigLoading.value = false;
   }
@@ -356,7 +919,7 @@ async function saveAutomationConfig() {
     automationForm.autoAiAnalysisEnabled = config.autoAiAnalysisEnabled;
     ElMessage.success('自动化流程配置已保存');
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     savingAutomationConfig.value = false;
   }
@@ -410,7 +973,7 @@ async function loadLogs(resetPage = false) {
       logsTotalPages.value = result.totalPages;
     }
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     logsLoading.value = false;
   }
@@ -468,7 +1031,7 @@ async function savePendingNotificationConfig() {
     pendingNotificationForm.dingTalkWebhook = "";
     ElMessage.success("待检测通知配置已保存");
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     savingPendingNotification.value = false;
   }
@@ -484,7 +1047,7 @@ async function testPendingNotification() {
     const result = await api.testPendingNotification();
     ElMessage.success(result.message);
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     testingPendingNotification.value = false;
   }
@@ -554,7 +1117,7 @@ async function saveAiConfig() {
       editingAiConfigId.value ? "AI 配置已更新" : "AI 配置已添加",
     );
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     savingAiConfig.value = false;
   }
@@ -566,7 +1129,7 @@ async function toggleAiConfig(config: AiProviderConfig, enabled: boolean) {
     await loadAiConfigs();
     ElMessage.success(enabled ? "AI 配置已启用" : "AI 配置已停用");
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   }
 }
 
@@ -576,7 +1139,7 @@ async function makeDefaultAiConfig(config: AiProviderConfig) {
     await loadAiConfigs();
     ElMessage.success(`已将“${config.name}”设为默认配置`);
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   }
 }
 
@@ -590,7 +1153,7 @@ async function testAiConfig(config: AiProviderConfig) {
     };
     ElMessage.success(`${config.name} 连接成功，耗时 ${result.latencyMs}ms`);
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     testingAiConfigId.value = null;
   }
@@ -612,7 +1175,7 @@ async function removeAiConfig(config: AiProviderConfig) {
     ElMessage.success("AI 配置已删除");
   } catch (error) {
     if (error === "cancel" || error === "close") return;
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   }
 }
 
@@ -654,7 +1217,7 @@ async function saveProject() {
     ElMessage.success(editingProjectId.value ? "服务已更新" : "服务已添加");
     editingProjectId.value = null;
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     savingProject.value = false;
   }
@@ -676,7 +1239,7 @@ async function removeProject(project: Project) {
     ElMessage.success("服务已删除");
   } catch (error) {
     if (error === "cancel" || error === "close") return;
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   }
 }
 
@@ -699,6 +1262,7 @@ function analysisStatusLabel(status: AnalysisTask["status"] | undefined) {
     RUNNING: "变更分析中",
     SUCCESS: "分析完成",
     FAILED: "分析失败",
+    CANCELLED: "已取消",
     NO_CHANGES: "无变更",
   }[status ?? "READY"];
 }
@@ -790,7 +1354,7 @@ async function toggleAnalysis(project: Project) {
     expandedProjectIds.value = expandedProjectIds.value.filter(
       (id) => id !== project.id,
     );
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     detailLoadingProjectId.value = null;
   }
@@ -873,6 +1437,7 @@ function analysisLogStatusLabel(status: AnalysisExecutionLog["status"]) {
     RUNNING: "执行中",
     SUCCESS: "成功",
     FAILED: "失败",
+    CANCELLED: "已取消",
     NO_CHANGES: "无变更",
     DISABLED: "未启用",
   }[status];
@@ -902,7 +1467,7 @@ async function loadInspectionLogs(resetPage = false) {
     inspectionLogPage.value = result.page;
     inspectionLogTotalPages.value = result.totalPages;
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     inspectionLogLoading.value = false;
   }
@@ -952,7 +1517,7 @@ async function inspectAllProjects() {
       : ElMessage.success("全部服务巡检完成");
     if (inspectionLogVisible.value) await loadInspectionLogs();
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     checkingAll.value = false;
   }
@@ -979,7 +1544,7 @@ async function startDetection(project: Project) {
         : `${project.name} 已提交变更分析`,
     );
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     detectingProjectId.value = null;
   }
@@ -1004,7 +1569,7 @@ async function rerunAnalysis(project: Project) {
       `${project.name} 已重新提交变更分析`,
     );
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     rerunningProjectId.value = null;
   }
@@ -1029,7 +1594,7 @@ async function startAiAnalysis(project: Project) {
     }
     ElMessage.success(`${project.name} 已提交 AI 分析`);
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     startingAiProjectId.value = null;
   }
@@ -1047,7 +1612,7 @@ async function testProjectConnection(project: Project) {
       ? ElMessage.success(`${project.name} 连接正常`)
       : ElMessage.error(`${project.name}：${result.message}`);
   } catch (error) {
-    ElMessage.error((error as Error).message);
+    notifyError(error, "操作失败");
   } finally {
     testingConnectionId.value = null;
   }
@@ -1157,8 +1722,8 @@ onBeforeUnmount(() => {
     authLoading,
     authSubmitting,
     bootstrapRequired,
+    authMode,
     currentSession,
-    membersVisible,
     membersLoading,
     members,
     memberCreating,
@@ -1167,10 +1732,61 @@ onBeforeUnmount(() => {
     pendingNotificationForm,
     automationForm,
     loginForm,
+    registerAccountForm,
+    registerWorkspaceForm,
     bootstrapForm,
     memberForm,
     canManageMembers,
     memberFormValid,
+    removingMemberId,
+    removeMember,
+    roleLabel,
+    disablingMemberId,
+    resetPasswordVisible,
+    resetPasswordForm,
+    resettingPassword,
+    disableMember,
+    restoreMember,
+    openResetPassword,
+    submitResetPassword,
+    auditLogs,
+    auditLoading,
+    auditFilters,
+    auditPage,
+    auditTotal,
+    auditTotalPages,
+    auditActionOptions,
+    auditActionLabel,
+    auditDetailText,
+    loadAuditLogs,
+    changeAuditPage,
+    resetAuditFilters,
+    workspaces,
+    workspacesLoading,
+    workspaceCreationPolicy,
+    switchingWorkspaceId,
+    workspaceDialogVisible,
+    savingWorkspace,
+    workspaceSettingsTab,
+    changeWorkspaceSettingsTab,
+    archivingWorkspace,
+    restoringWorkspace,
+    archiveConfirmName,
+    isCurrentWorkspaceArchived,
+    archiveWorkspace,
+    restoreWorkspace,
+    savingWorkspaceSettings,
+    workspaceForm,
+    workspaceSettingsForm,
+    currentWorkspace,
+    canManageWorkspace,
+    loadWorkspaces,
+    loadWorkspaceCreationPolicy,
+    switchWorkspace,
+    openCreateWorkspace,
+    createWorkspace,
+    openWorkspaceSettings,
+    saveWorkspaceSettings,
     latestAnalysisByProject,
     shortCommit,
     logsStatusOptions,
@@ -1180,6 +1796,11 @@ onBeforeUnmount(() => {
     stopBackgroundTasks,
     initializeAuth,
     submitAuth,
+    openRegistration,
+    showLogin,
+    continueRegistration,
+    backToRegisterAccount,
+    submitRegistration,
     logout,
     openMembers,
     createMember,

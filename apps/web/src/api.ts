@@ -1,5 +1,7 @@
 import type {
   AnalysisTask,
+  AuditLogPage,
+  AuditLogQuery,
   AutomationConfig,
   AnalysisLogPage,
   AnalysisLogQuery,
@@ -7,6 +9,7 @@ import type {
   AiProviderConnectionTest,
   CreateAiProviderConfigInput,
   CreateProjectInput,
+  CreateWorkspaceInput,
   InspectionLog,
   InspectionLogPage,
   InspectionLogQuery,
@@ -20,16 +23,47 @@ import type {
   UpdateAiProviderConfigInput,
   UpdateAutomationConfigInput,
   UpdatePendingNotificationConfigInput,
+  UpdateWorkspaceInput,
   VersionDetection,
   AuthSession,
   BootstrapInput,
   BootstrapStatus,
   CreateWorkspaceMemberInput,
   LoginInput,
+  RegisterInput,
+  WorkspaceCreationPolicy,
   WorkspaceMember,
+  WorkspaceOverview,
 } from '@impact-flow/contracts';
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+/**
+ * 响应回来时如果已经切换过工作空间，就丢弃这次结果。
+ *
+ * 原因：切换工作空间是就地更新会话（不轮换 token），浏览器内所有标签页共享同一个
+ * Cookie，因此旧空间的在途请求仍会正常返回。若不丢弃，旧空间的数据会覆盖新空间的
+ * 页面状态，表现为「切换后数据还是旧的」。这类错误属于预期内的丢弃，不应提示用户。
+ */
+export class WorkspaceSwitchedError extends Error {
+  constructor() {
+    super('工作空间已切换，本次响应已丢弃');
+    this.name = 'WorkspaceSwitchedError';
+  }
+}
+
+let workspaceGeneration = 0;
+
+/** 切换工作空间前后调用，使所有在途请求的响应失效 */
+export function bumpWorkspaceGeneration() {
+  workspaceGeneration += 1;
+}
+
+async function request<T>(
+  url: string,
+  init?: RequestInit,
+  options: { guard?: boolean } = {},
+): Promise<T> {
+  const guarded = options.guard !== false;
+  const generation = workspaceGeneration;
   const response = await fetch(url, {
     ...init,
     credentials: 'include',
@@ -47,7 +81,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message || `请求失败（${response.status}）`);
   }
 
-  return response.json() as Promise<T>;
+  const payload = (await response.json()) as T;
+  // 切换工作空间期间返回的旧空间数据必须丢弃；切换请求本身不受影响
+  if (guarded && generation !== workspaceGeneration) {
+    throw new WorkspaceSwitchedError();
+  }
+  return payload;
 }
 
 export const api = {
@@ -63,10 +102,74 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  register: (input: RegisterInput) =>
+    request<AuthSession>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   logout: () =>
     request<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
   getCurrentSession: () => request<AuthSession>('/api/auth/me'),
+  listWorkspaces: () => request<WorkspaceOverview[]>('/api/workspaces'),
+  getWorkspaceCreationPolicy: () =>
+    request<WorkspaceCreationPolicy>('/api/workspaces/creation-policy'),
+  getCurrentWorkspace: () =>
+    request<WorkspaceOverview>('/api/workspaces/current'),
+  updateCurrentWorkspace: (input: UpdateWorkspaceInput) =>
+    request<WorkspaceOverview>('/api/workspaces/current', {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  archiveCurrentWorkspace: () =>
+    request<{ archived: boolean }>('/api/workspaces/current/archive', {
+      method: 'POST',
+    }),
+  restoreWorkspace: (id: string) =>
+    request<{ restored: boolean }>(`/api/workspaces/${id}/restore`, {
+      method: 'POST',
+    }),
+  /**
+   * 切换工作空间。此请求不能被 generation 守卫拦截，
+   * 否则切换自身的结果会被当成过期响应丢弃。
+   */
+  switchWorkspace: (id: string) =>
+    request<AuthSession>(`/api/workspaces/${id}/switch`, { method: 'POST' }, {
+      guard: false,
+    }),
+  createWorkspace: (input: CreateWorkspaceInput) =>
+    request<{ workspace: WorkspaceOverview; session: AuthSession }>(
+      '/api/workspaces',
+      { method: 'POST', body: JSON.stringify(input) },
+      { guard: false },
+    ),
   listMembers: () => request<WorkspaceMember[]>('/api/members'),
+  removeMember: (userId: string) =>
+    request<{ removed: boolean; revokedSessions: number }>(
+      `/api/members/${userId}`,
+      { method: 'DELETE' },
+    ),
+  disableMember: (userId: string) =>
+    request<{ disabled: boolean; revokedSessions: number }>(
+      `/api/members/${userId}/disable`,
+      { method: 'POST' },
+    ),
+  restoreMember: (userId: string) =>
+    request<{ restored: boolean }>(`/api/members/${userId}/restore`, {
+      method: 'POST',
+    }),
+  resetMemberPassword: (userId: string, password: string) =>
+    request<{ reset: boolean; revokedSessions: number }>(
+      `/api/members/${userId}/reset-password`,
+      { method: 'POST', body: JSON.stringify({ password }) },
+    ),
+  listAuditLogs: (query: AuditLogQuery = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    const suffix = params.size ? `?${params.toString()}` : '';
+    return request<AuditLogPage>(`/api/audit-logs${suffix}`);
+  },
   createMember: (input: CreateWorkspaceMemberInput) =>
     request<WorkspaceMember>('/api/members', {
       method: 'POST',

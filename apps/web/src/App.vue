@@ -1,12 +1,23 @@
 <script setup lang="ts">
 import { defineAsyncComponent, provide } from "vue";
-import { Collection, DataAnalysis, Document, Setting, User } from "@element-plus/icons-vue";
+import {
+  Collection,
+  DataAnalysis,
+  Document,
+  Setting,
+  SwitchButton,
+  User,
+} from "@element-plus/icons-vue";
 import { useWorkspaceController } from "./composables/useWorkspaceController";
 import { WorkspaceContextKey } from "./workspace-context";
 import InspectionLogsDialog from "./components/dialogs/InspectionLogsDialog.vue";
 import ProjectDialog from "./components/dialogs/ProjectDialog.vue";
 import AiConfigDialog from "./components/dialogs/AiConfigDialog.vue";
-import MembersDialog from "./components/dialogs/MembersDialog.vue";
+import WorkspaceSwitcher from "./components/workspace/WorkspaceSwitcher.vue";
+import CreateWorkspaceDialog from "./components/workspace/CreateWorkspaceDialog.vue";
+const WorkspaceSettingsView = defineAsyncComponent(
+  () => import("./views/WorkspaceSettingsView.vue"),
+);
 
 const ReleaseAnalysisView = defineAsyncComponent(
   () => import("./views/ReleaseAnalysisView.vue"),
@@ -15,6 +26,7 @@ const ServicesView = defineAsyncComponent(
   () => import("./views/ServicesView.vue"),
 );
 const LogsView = defineAsyncComponent(() => import("./views/LogsView.vue"));
+const MembersView = defineAsyncComponent(() => import("./views/MembersView.vue"));
 const SettingsView = defineAsyncComponent(
   () => import("./views/SettingsView.vue"),
 );
@@ -24,6 +36,7 @@ provide(WorkspaceContextKey, workspace);
 const {
   activeView,
   authLoading,
+  authMode,
   authSubmitting,
   bootstrapRequired,
   bootstrapForm,
@@ -31,10 +44,19 @@ const {
   currentSession,
   loading,
   loginForm,
+  registerAccountForm,
+  registerWorkspaceForm,
   logout,
+  openRegistration,
+  showLogin,
+  continueRegistration,
+  backToRegisterAccount,
+  submitRegistration,
   openBaseConfigView,
   openLogsView,
   openMembers,
+  openWorkspaceSettings,
+  isCurrentWorkspaceArchived,
   submitAuth,
 } = workspace;
 </script>
@@ -59,7 +81,11 @@ const {
     </section>
 
     <section class="auth-panel">
-      <form class="auth-card" @submit.prevent="submitAuth">
+      <form
+        v-if="bootstrapRequired || authMode === 'login'"
+        class="auth-card"
+        @submit.prevent="submitAuth"
+      >
         <header>
           <span class="auth-step">{{ bootstrapRequired ? "首次使用" : "账号登录" }}</span>
           <h2>{{ bootstrapRequired ? "初始化工作空间" : "欢迎回来" }}</h2>
@@ -102,6 +128,82 @@ const {
         <button class="auth-submit" :disabled="authSubmitting">
           {{ authSubmitting ? "正在进入…" : bootstrapRequired ? "创建并进入" : "进入工作台" }}
         </button>
+        <div v-if="!bootstrapRequired" class="auth-alternative">
+          <span>还没有账号？</span>
+          <button type="button" @click="openRegistration">新建账号</button>
+        </div>
+      </form>
+
+      <form
+        v-else-if="authMode === 'register-account'"
+        class="auth-card"
+        @submit.prevent="continueRegistration"
+      >
+        <header>
+          <span class="auth-step">新账号</span>
+          <h2>创建登录账号</h2>
+          <p>填写账号信息，下一步可以为自己创建一个工作空间。</p>
+        </header>
+        <label>
+          <span>显示名称</span>
+          <input v-model.trim="registerAccountForm.displayName" autocomplete="name" autofocus />
+        </label>
+        <label>
+          <span>登录账号</span>
+          <input v-model.trim="registerAccountForm.username" autocomplete="username" />
+        </label>
+        <label>
+          <span>登录密码</span>
+          <input
+            v-model="registerAccountForm.password"
+            type="password"
+            autocomplete="new-password"
+            placeholder="至少 8 个字符"
+          />
+        </label>
+        <label>
+          <span>确认密码</span>
+          <input
+            v-model="registerAccountForm.confirmPassword"
+            type="password"
+            autocomplete="new-password"
+          />
+        </label>
+        <button class="auth-submit">提交账号信息</button>
+        <div class="auth-alternative">
+          <span>已有账号？</span>
+          <button type="button" @click="showLogin">返回登录</button>
+        </div>
+      </form>
+
+      <form v-else class="auth-card" @submit.prevent="submitRegistration">
+        <header>
+          <span class="auth-step">创建工作空间</span>
+          <h2>完成账号注册</h2>
+          <p>你将成为该工作空间的所有者，创建成功后会自动登录。</p>
+        </header>
+        <label>
+          <span>工作空间名称</span>
+          <input v-model.trim="registerWorkspaceForm.name" autocomplete="organization" autofocus />
+        </label>
+        <label>
+          <span>工作空间编码</span>
+          <input
+            v-model.trim="registerWorkspaceForm.code"
+            autocomplete="off"
+            placeholder="例如：product-team"
+          />
+        </label>
+        <label>
+          <span>工作空间描述（选填）</span>
+          <input v-model.trim="registerWorkspaceForm.description" autocomplete="off" />
+        </label>
+        <button class="auth-submit" :disabled="authSubmitting">
+          {{ authSubmitting ? "正在创建…" : "创建并进入工作空间" }}
+        </button>
+        <div class="auth-alternative">
+          <button type="button" @click="backToRegisterAccount">返回修改账号信息</button>
+        </div>
       </form>
     </section>
   </main>
@@ -109,6 +211,10 @@ const {
   <div v-else class="shell" v-loading="loading">
     <aside class="rail">
       <div class="brand-mark"><b>IF</b><span>IMPACT FLOW</span></div>
+      <div class="rail-workspace">
+        <span class="rail-workspace-label">工作空间：</span>
+        <WorkspaceSwitcher />
+      </div>
       <nav aria-label="主导航">
         <button
           class="rail-button"
@@ -135,6 +241,15 @@ const {
           <span>日志管理</span>
         </button>
         <button
+          v-if="canManageMembers"
+          class="rail-button"
+          :class="{ active: activeView === 'members' }"
+          @click="openMembers"
+        >
+          <el-icon><User /></el-icon>
+          <span>成员管理</span>
+        </button>
+        <button
           class="rail-button"
           :class="{ active: activeView === 'base-config' }"
           @click="openBaseConfigView"
@@ -143,29 +258,47 @@ const {
           <span>基础配置</span>
         </button>
       </nav>
-      <div class="rail-account">
-        <div class="rail-avatar">{{ currentSession.user.displayName.slice(0, 1) }}</div>
-        <div>
-          <strong>{{ currentSession.user.displayName }}</strong>
-          <span>{{ currentSession.workspace.name }}</span>
-        </div>
-        <button
-          v-if="canManageMembers"
-          title="成员管理"
-          aria-label="成员管理"
-          @click="openMembers"
-        ><el-icon><User /></el-icon></button>
-        <button title="退出登录" aria-label="退出登录" @click="logout">↗</button>
-      </div>
       <div class="rail-status" title="API 服务状态">
         <span></span>
+      </div>
+      <div class="rail-account">
+        <button
+          class="rail-avatar rail-avatar-button"
+          :class="{ active: activeView === 'workspace-settings' }"
+          type="button"
+          title="工作空间设置"
+          aria-label="打开工作空间设置"
+          @click="openWorkspaceSettings('profile')"
+        >
+          {{ currentSession.user.displayName.slice(0, 1) }}
+        </button>
+        <div class="rail-user-copy">
+          <strong>{{ currentSession.user.displayName }}</strong>
+          <span>@{{ currentSession.user.username }}</span>
+        </div>
+        <button
+          class="rail-logout-button"
+          type="button"
+          title="退出登录"
+          aria-label="退出登录"
+          @click="logout"
+        >
+          <el-icon><SwitchButton /></el-icon>
+        </button>
       </div>
     </aside>
 
     <main class="workspace">
+      <div v-if="isCurrentWorkspaceArchived" class="archived-banner">
+        <strong>工作空间已归档</strong>
+        <span>当前为只读状态。所有者可前往「工作空间设置 → 危险操作」恢复。</span>
+        <button @click="openWorkspaceSettings('danger')">去恢复</button>
+      </div>
       <ReleaseAnalysisView v-if="activeView === 'analysis'" />
       <ServicesView v-else-if="activeView === 'services'" />
       <LogsView v-else-if="activeView === 'logs'" />
+      <MembersView v-else-if="activeView === 'members'" />
+      <WorkspaceSettingsView v-else-if="activeView === 'workspace-settings'" />
       <SettingsView v-else />
     </main>
 
@@ -175,6 +308,7 @@ const {
 
     <AiConfigDialog />
 
-    <MembersDialog />
+    <CreateWorkspaceDialog />
+
   </div>
 </template>
