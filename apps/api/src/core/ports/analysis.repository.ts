@@ -11,14 +11,28 @@ import type {
 
 export const ANALYSIS_REPOSITORY = Symbol('ANALYSIS_REPOSITORY');
 
+/**
+ * 工作空间作用域约定：
+ * - 不加后缀的方法一律**必须**显式传入 workspaceId，用于所有面向用户会话的业务读取。
+ *   禁止以可选参数形式提供，避免调用方漏传后静默跨工作空间读取。
+ * - 以 `ForWorker` 结尾的方法是无作用域的系统级查询，仅允许应用启动恢复与后台任务执行器调用。
+ */
 export interface AnalysisRepository {
-  findAll(workspaceId?: string): Promise<AnalysisTask[]>;
-  findById(id: string, workspaceId?: string): Promise<AnalysisTask | null>;
-  findPending(): Promise<AnalysisTask[]>;
-  findPendingAi(): Promise<AnalysisTask[]>;
-  findRequestedAi(): Promise<AnalysisTask[]>;
-  findActiveByProject(projectId: string): Promise<AnalysisTask | null>;
-  listLogs(query: AnalysisLogQuery, workspaceId?: string): Promise<AnalysisLogPage>;
+  findAll(workspaceId: string): Promise<AnalysisTask[]>;
+  findById(id: string, workspaceId: string): Promise<AnalysisTask | null>;
+  /** 系统级：应用启动时恢复全部工作空间中未完成的基础分析任务 */
+  findPendingForWorker(): Promise<AnalysisTask[]>;
+  /** 系统级：应用启动时恢复全部工作空间中未完成的 AI 分析任务 */
+  findPendingAiForWorker(): Promise<AnalysisTask[]>;
+  /** 系统级：应用启动时恢复全部工作空间中已请求但未执行的 AI 分析任务 */
+  findRequestedAiForWorker(): Promise<AnalysisTask[]>;
+  /** 系统级：任务执行器加载任务，任务自身是作用域的权威来源 */
+  findByIdForWorkerTask(id: string): Promise<AnalysisTask | null>;
+  findActiveByProject(
+    projectId: string,
+    workspaceId: string,
+  ): Promise<AnalysisTask | null>;
+  listLogs(query: AnalysisLogQuery, workspaceId: string): Promise<AnalysisLogPage>;
   create(input: Omit<AnalysisTask, 'id' | 'createdAt'>): Promise<AnalysisTask>;
   markRunning(id: string): Promise<AnalysisTask>;
   complete(

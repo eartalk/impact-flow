@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { BootstrapDto } from './dto/bootstrap.dto';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 import { CurrentSession, Public } from './auth.decorators';
 import type { AuthSession } from '@impact-flow/contracts';
 import { readCookie } from './auth-cookie';
@@ -43,6 +44,18 @@ export class AuthController {
     @Res({ passthrough: true }) response: HttpResponse,
   ) {
     const issued = await this.auth.login(input, request.ip);
+    this.setSessionCookie(response, issued.token);
+    return issued.session;
+  }
+
+  @Public()
+  @Post('register')
+  async register(
+    @Body() input: RegisterDto,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: HttpResponse,
+  ) {
+    const issued = await this.auth.register(input, request.ip);
     this.setSessionCookie(response, issued.token);
     return issued.session;
   }

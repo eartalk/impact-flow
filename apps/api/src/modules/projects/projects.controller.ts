@@ -53,12 +53,12 @@ export class ProjectsController {
   @Post('inspect-all')
   @Roles('OWNER', 'ADMIN', 'MEMBER')
   inspectAll(@CurrentSession() session: AuthSession) {
-    return this.projects.inspectAll('MANUAL', session.workspace.id);
+    return this.projects.inspectAll(session.workspace.id);
   }
 
   @Post(':id/inspect-version')
   @Roles('OWNER', 'ADMIN', 'MEMBER')
   inspectVersion(@Param('id') id: string, @CurrentSession() session: AuthSession) {
-    return this.projects.inspectVersion(id, 'MANUAL', session.workspace.id);
+    return this.projects.inspectVersion(id, session.workspace.id);
   }
 }

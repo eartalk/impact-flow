@@ -14,6 +14,10 @@ import { MysqlIdentityRepository } from './mysql-identity.repository';
 import { PasswordHasher } from '../security/password-hasher';
 import { AUTOMATION_POLICY_REPOSITORY } from '../../core/ports/automation-policy.repository';
 import { MysqlAutomationPolicyRepository } from './mysql-automation-policy.repository';
+import { WORKSPACE_REPOSITORY } from '../../core/ports/workspace.repository';
+import { MysqlWorkspaceRepository } from './mysql-workspace.repository';
+import { AUDIT_REPOSITORY } from '../../core/ports/audit.repository';
+import { MysqlAuditRepository } from './mysql-audit.repository';
 
 @Global()
 @Module({
@@ -25,6 +29,8 @@ import { MysqlAutomationPolicyRepository } from './mysql-automation-policy.repos
     MysqlPendingNotificationRepository,
     MysqlIdentityRepository,
     MysqlAutomationPolicyRepository,
+    MysqlWorkspaceRepository,
+    MysqlAuditRepository,
     SecretCipher,
     PasswordHasher,
     {
@@ -51,6 +57,14 @@ import { MysqlAutomationPolicyRepository } from './mysql-automation-policy.repos
       provide: AUTOMATION_POLICY_REPOSITORY,
       useExisting: MysqlAutomationPolicyRepository,
     },
+    {
+      provide: WORKSPACE_REPOSITORY,
+      useExisting: MysqlWorkspaceRepository,
+    },
+    {
+      provide: AUDIT_REPOSITORY,
+      useExisting: MysqlAuditRepository,
+    },
   ],
   exports: [
     PROJECT_REPOSITORY,
@@ -59,6 +73,8 @@ import { MysqlAutomationPolicyRepository } from './mysql-automation-policy.repos
     PENDING_NOTIFICATION_REPOSITORY,
     IDENTITY_REPOSITORY,
     AUTOMATION_POLICY_REPOSITORY,
+    WORKSPACE_REPOSITORY,
+    AUDIT_REPOSITORY,
     DatabaseService,
     SecretCipher,
     PasswordHasher,

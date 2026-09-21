@@ -21,12 +21,28 @@ class FakeProjectRepository implements ProjectRepository {
   private projects: Project[] = [];
   private inspectionLogs: InspectionLog[] = [];
 
-  async findAll() { return this.projects; }
-  async findById(id: string) {
+  async findAll(workspaceId: string) {
+    return this.projects.filter((project) => project.workspaceId === workspaceId);
+  }
+  async findAllForScheduler() {
+    return this.projects;
+  }
+  async findById(id: string, workspaceId: string) {
+    return (
+      this.projects.find(
+        (project) => project.id === id && project.workspaceId === workspaceId,
+      ) ?? null
+    );
+  }
+  async findByIdForWorkerTask(id: string) {
     return this.projects.find((project) => project.id === id) ?? null;
   }
-  async findByCode(code: string) {
-    return this.projects.find((project) => project.code === code) ?? null;
+  async findByCode(code: string, workspaceId: string) {
+    return (
+      this.projects.find(
+        (project) => project.code === code && project.workspaceId === workspaceId,
+      ) ?? null
+    );
   }
   async create(workspaceId: string, input: CreateProjectInput) {
     const project: Project = {
@@ -47,7 +63,7 @@ class FakeProjectRepository implements ProjectRepository {
     return project;
   }
   async update(id: string, input: UpdateProjectInput) {
-    const project = await this.findById(id);
+    const project = await this.readById(id);
     if (!project) throw new Error('not found');
     Object.assign(project, input);
     return project;
@@ -56,11 +72,11 @@ class FakeProjectRepository implements ProjectRepository {
     this.projects = this.projects.filter((project) => project.id !== id);
   }
   async updateLastAnalyzedCommit(id: string, commit: string) {
-    const project = await this.findById(id);
+    const project = await this.readById(id);
     if (project) project.lastAnalyzedCommit = commit;
   }
   async markInspectionRunning(id: string) {
-    const project = await this.findById(id);
+    const project = await this.readById(id);
     if (project) project.checkStatus = 'RUNNING';
   }
   async completeInspection(
@@ -71,7 +87,7 @@ class FakeProjectRepository implements ProjectRepository {
       pendingCommits: CommitSummary[];
     },
   ) {
-    const project = await this.findById(id);
+    const project = await this.readById(id);
     if (!project) throw new Error('not found');
     Object.assign(project, {
       ...input,
@@ -83,7 +99,7 @@ class FakeProjectRepository implements ProjectRepository {
     return project;
   }
   async failInspection(id: string, errorMessage: string) {
-    const project = await this.findById(id);
+    const project = await this.readById(id);
     if (!project) throw new Error('not found');
     project.checkStatus = 'FAILED';
     project.checkError = errorMessage;
@@ -93,7 +109,7 @@ class FakeProjectRepository implements ProjectRepository {
     projectId: string,
     triggerType: InspectionTrigger,
   ) {
-    const project = await this.findById(projectId);
+    const project = await this.readById(projectId);
     if (!project) throw new Error('not found');
     const id = `log-${this.inspectionLogs.length + 1}`;
     this.inspectionLogs.push({
@@ -122,20 +138,28 @@ class FakeProjectRepository implements ProjectRepository {
     const log = this.inspectionLogs.find((item) => item.id === id);
     if (log) Object.assign(log, { status: 'FAILED', errorMessage, finishedAt: new Date().toISOString() });
   }
-  async findInspectionLogs() {
+  async findInspectionLogs(_query: unknown, workspaceId: string) {
+    const scoped = this.inspectionLogs.filter((log) => {
+      const project = this.projects.find((item) => item.id === log.projectId);
+      return project?.workspaceId === workspaceId;
+    });
     return {
-      items: this.inspectionLogs,
-      total: this.inspectionLogs.length,
+      items: scoped,
+      total: scoped.length,
       page: 1,
       pageSize: 10,
       totalPages: 1,
       summary: {
-        success: this.inspectionLogs.filter((log) => log.status === 'SUCCESS').length,
-        failed: this.inspectionLogs.filter((log) => log.status === 'FAILED').length,
-        running: this.inspectionLogs.filter((log) => log.status === 'RUNNING').length,
+        success: scoped.filter((log) => log.status === 'SUCCESS').length,
+        failed: scoped.filter((log) => log.status === 'FAILED').length,
+        running: scoped.filter((log) => log.status === 'RUNNING').length,
       },
     };
   }
+  private readById(id: string) {
+    return this.projects.find((project) => project.id === id) ?? null;
+  }
+
   async cleanupInspectionLogs() {
     return 0;
   }
@@ -158,7 +182,7 @@ describe('ProjectsService', () => {
       productionBranch: 'production',
     });
 
-    const result = await service.testConnection(project.id);
+    const result = await service.testConnection(project.id, 'workspace-1');
 
     expect(result).toEqual(
       expect.objectContaining({ success: true, remoteCommit: 'abc123' }),
@@ -189,7 +213,7 @@ describe('ProjectsService', () => {
       productionBranch: 'production',
     });
 
-    const result = await service.detectVersion(project.id);
+    const result = await service.detectVersion(project.id, 'workspace-1');
 
     expect(result.targetCommit).toBe('def456');
     expect(result.hasChanges).toBe(true);
@@ -227,13 +251,13 @@ describe('ProjectsService', () => {
       productionBranch: 'production',
     });
 
-    const result = await service.inspectVersion(project.id);
+    const result = await service.inspectVersion(project.id, 'workspace-1');
 
     expect(result.checkStatus).toBe('SUCCESS');
     expect(result.detectedCommit).toBe('def456');
     expect(result.previousDetectedCommit).toBe('abc123');
     expect(result.pendingCommitCount).toBe(1);
-    expect((await repository.findInspectionLogs()).items[0]).toEqual(
+    expect((await repository.findInspectionLogs({}, 'workspace-1')).items[0]).toEqual(
       expect.objectContaining({ status: 'SUCCESS', triggerType: 'MANUAL' }),
     );
     expect(notifications.notifyIfNeeded).toHaveBeenCalledWith(
@@ -244,5 +268,90 @@ describe('ProjectsService', () => {
         commits: expect.any(Array),
       }),
     );
+  });
+
+  it('only lists projects of the requested workspace', async () => {
+    const repository = new FakeProjectRepository();
+    const service = new ProjectsService(
+      repository,
+      { testConnection: jest.fn(), detectVersion: jest.fn(), listCommits: jest.fn(), analyzeRange: jest.fn() },
+      notificationService(),
+    );
+    await service.create('workspace-1', {
+      name: '工地服务',
+      code: 'worksite-service',
+      repositoryUrl: 'git@example.com:delivery/worksite.git',
+      productionBranch: 'production',
+    });
+    await service.create('workspace-2', {
+      name: '订单服务',
+      code: 'order-service',
+      repositoryUrl: 'git@example.com:trade/order.git',
+      productionBranch: 'production',
+    });
+
+    const first = await service.list('workspace-1');
+    const second = await service.list('workspace-2');
+
+    expect(first.map((item) => item.code)).toEqual(['worksite-service']);
+    expect(second.map((item) => item.code)).toEqual(['order-service']);
+  });
+
+  it('cannot read or inspect a project belonging to another workspace', async () => {
+    const repository = new FakeProjectRepository();
+    const git: GitGateway = {
+      testConnection: jest.fn(),
+      detectVersion: jest.fn(),
+      listCommits: jest.fn(),
+      analyzeRange: jest.fn(),
+    };
+    const service = new ProjectsService(repository, git, notificationService());
+    const foreign = await service.create('workspace-2', {
+      name: '订单服务',
+      code: 'order-service',
+      repositoryUrl: 'git@example.com:trade/order.git',
+      productionBranch: 'production',
+    });
+
+    // 仅凭项目 ID、冒充其他工作空间，必须拿不到数据
+    await expect(service.testConnection(foreign.id, 'workspace-1')).rejects.toThrow(
+      '项目不存在',
+    );
+    await expect(service.detectVersion(foreign.id, 'workspace-1')).rejects.toThrow(
+      '项目不存在',
+    );
+    await expect(
+      service.inspectVersion(foreign.id, 'workspace-1'),
+    ).rejects.toThrow('项目不存在');
+    expect(git.detectVersion).not.toHaveBeenCalled();
+    expect(git.testConnection).not.toHaveBeenCalled();
+  });
+
+  it('keeps inspection logs scoped to the workspace', async () => {
+    const repository = new FakeProjectRepository();
+    const git: GitGateway = {
+      testConnection: jest.fn().mockResolvedValue({ remoteCommit: 'abc123' }),
+      detectVersion: jest.fn().mockResolvedValue({
+        baseCommit: 'base-1',
+        targetCommit: 'target-1',
+        baseSource: 'FIRST_PARENT',
+      }),
+      listCommits: jest.fn().mockResolvedValue([]),
+      analyzeRange: jest.fn(),
+    };
+    const service = new ProjectsService(repository, git, notificationService());
+    const project = await service.create('workspace-1', {
+      name: '工地服务',
+      code: 'worksite-service',
+      repositoryUrl: 'git@example.com:delivery/worksite.git',
+      productionBranch: 'production',
+    });
+    await service.inspectVersion(project.id, 'workspace-1');
+
+    const ownWorkspace = await service.listInspectionLogs({}, 'workspace-1');
+    const otherWorkspace = await service.listInspectionLogs({}, 'workspace-2');
+
+    expect(ownWorkspace.total).toBe(1);
+    expect(otherWorkspace.total).toBe(0);
   });
 });

@@ -73,17 +73,28 @@ type CountRow = RowDataPacket & { total: number };
 export class MysqlAnalysisRepository implements AnalysisRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async findAll(workspaceId?: string): Promise<AnalysisTask[]> {
+  async findAll(workspaceId: string): Promise<AnalysisTask[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
-      `${this.baseSelect()} ${workspaceId ? 'WHERE p.workspace_id = ?' : ''}
+      `${this.baseSelect()} WHERE p.workspace_id = ?
        ORDER BY a.created_at DESC`,
-      workspaceId ? [workspaceId] : [],
+      [workspaceId],
     );
     return rows.map((row) => this.map(row));
   }
 
-  async findById(id: string, workspaceId?: string): Promise<AnalysisTask | null> {
+  async findById(id: string, workspaceId: string): Promise<AnalysisTask | null> {
+    return this.findByIdInternal(id, workspaceId);
+  }
+
+  async findByIdForWorkerTask(id: string): Promise<AnalysisTask | null> {
+    return this.findByIdInternal(id);
+  }
+
+  private async findByIdInternal(
+    id: string,
+    workspaceId?: string,
+  ): Promise<AnalysisTask | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
       `${this.baseSelect()} WHERE a.id = ?
@@ -109,7 +120,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     };
   }
 
-  async findPending(): Promise<AnalysisTask[]> {
+  async findPendingForWorker(): Promise<AnalysisTask[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
       `${this.baseSelect()} WHERE a.status IN ('READY', 'RUNNING') ORDER BY a.created_at`,
@@ -117,7 +128,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return rows.map((row) => this.map(row));
   }
 
-  async findPendingAi(): Promise<AnalysisTask[]> {
+  async findPendingAiForWorker(): Promise<AnalysisTask[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
       `${this.baseSelect()}
@@ -127,7 +138,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return rows.map((row) => this.map(row));
   }
 
-  async findRequestedAi(): Promise<AnalysisTask[]> {
+  async findRequestedAiForWorker(): Promise<AnalysisTask[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
       `${this.baseSelect()}
@@ -139,20 +150,24 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return rows.map((row) => this.map(row));
   }
 
-  async findActiveByProject(projectId: string): Promise<AnalysisTask | null> {
+  async findActiveByProject(
+    projectId: string,
+    workspaceId: string,
+  ): Promise<AnalysisTask | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
       `${this.baseSelect()}
-       WHERE a.project_id = ? AND a.status IN ('READY', 'RUNNING')
+       WHERE a.project_id = ? AND p.workspace_id = ?
+         AND a.status IN ('READY', 'RUNNING')
        ORDER BY a.created_at DESC LIMIT 1`,
-      [projectId],
+      [projectId, workspaceId],
     );
     return rows[0] ? this.map(rows[0]) : null;
   }
 
   async listLogs(
     query: AnalysisLogQuery,
-    workspaceId?: string,
+    workspaceId: string,
   ): Promise<AnalysisLogPage> {
     const db = await this.database.connection();
     const page = Math.max(1, query.page ?? 1);
@@ -160,13 +175,9 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     const offset = (page - 1) * pageSize;
     const changeAnalysis = query.type === 'CHANGE_ANALYSIS';
 
-    // projectId 可省略，因此必须显式按工作空间隔离，避免跨租户读到日志
-    const conditions: string[] = [];
-    const filterValues: Array<string | number> = [];
-    if (workspaceId) {
-      conditions.push('p.workspace_id = ?');
-      filterValues.push(workspaceId);
-    }
+    // projectId 可省略，工作空间条件必须始终存在
+    const conditions: string[] = ['p.workspace_id = ?'];
+    const filterValues: Array<string | number> = [workspaceId];
     if (query.projectId) {
       conditions.push(changeAnalysis ? 'a.project_id = ?' : 'l.project_id = ?');
       filterValues.push(query.projectId);
@@ -176,7 +187,6 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       filterValues.push(query.status);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
     const from = changeAnalysis
       ? `FROM analysis_task a
          JOIN project p ON p.id = a.project_id`
@@ -257,7 +267,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
         ],
       );
       await connection.commit();
-      return (await this.findById(analysisId))!;
+      return (await this.findByIdInternal(analysisId))!;
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -273,7 +283,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
        WHERE id = ?`,
       [id],
     );
-    return (await this.findById(id))!;
+    return (await this.findByIdInternal(id))!;
   }
 
   async complete(
@@ -331,7 +341,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
         [id],
       );
       await connection.commit();
-      return (await this.findById(id))!;
+      return (await this.findByIdInternal(id))!;
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -356,7 +366,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
         [randomUUID(), id],
       );
       await connection.commit();
-      return (await this.findById(id))!;
+      return (await this.findByIdInternal(id))!;
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -389,7 +399,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
         ],
       );
       await connection.commit();
-      return (await this.findById(id))!;
+      return (await this.findByIdInternal(id))!;
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -406,7 +416,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
        WHERE id = ?`,
       [errorMessage.slice(0, 2000), id],
     );
-    return (await this.findById(id))!;
+    return (await this.findByIdInternal(id))!;
   }
 
   private async insertFiles(

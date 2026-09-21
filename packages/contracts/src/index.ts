@@ -3,7 +3,9 @@ export type AnalysisStatus =
   | 'RUNNING'
   | 'SUCCESS'
   | 'FAILED'
-  | 'NO_CHANGES';
+  | 'NO_CHANGES'
+  /** 工作空间归档时，尚未运行的 READY 任务会被置为已取消 */
+  | 'CANCELLED';
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
@@ -370,6 +372,41 @@ export type UpdateProjectInput = Partial<CreateProjectInput>;
 
 export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
 
+export type WorkspaceStatus = 'ACTIVE' | 'ARCHIVED';
+
+/** 建设工作空间的用户级策略，不复用工作空间内的角色 */
+export type WorkspaceCreationMode = 'ANY_USER' | 'ADMIN_ONLY' | 'DISABLED';
+
+export interface WorkspaceOverview {
+  id: string;
+  name: string;
+  code: string;
+  description: string | null;
+  status: WorkspaceStatus;
+  role: WorkspaceRole;
+  ownerUserId: string | null;
+  memberCount: number;
+  projectCount: number;
+  createdAt: string;
+  archivedAt: string | null;
+}
+
+export interface CreateWorkspaceInput {
+  name: string;
+  code: string;
+  description?: string;
+}
+
+export interface UpdateWorkspaceInput {
+  name?: string;
+  description?: string | null;
+}
+
+export interface WorkspaceCreationPolicy {
+  mode: WorkspaceCreationMode;
+  allowed: boolean;
+}
+
 export interface AuthUser {
   id: string;
   username: string;
@@ -382,6 +419,8 @@ export interface WorkspaceSummary {
   name: string;
   code: string;
   role: WorkspaceRole;
+  /** 会话所在工作空间的状态；ARCHIVED 表示当前处于只读管理态 */
+  status: WorkspaceStatus;
 }
 
 export interface AuthSession {
@@ -405,6 +444,15 @@ export interface LoginInput {
   password: string;
 }
 
+export interface RegisterInput {
+  username: string;
+  password: string;
+  displayName: string;
+  workspaceName: string;
+  workspaceCode: string;
+  workspaceDescription?: string;
+}
+
 export interface WorkspaceMember {
   userId: string;
   username: string;
@@ -419,4 +467,37 @@ export interface CreateWorkspaceMemberInput {
   password: string;
   displayName: string;
   role: Exclude<WorkspaceRole, 'OWNER'>;
+}
+
+export interface AuditLog {
+  id: string;
+  workspaceId: string | null;
+  operatorId: string | null;
+  operatorName: string | null;
+  action: string;
+  resourceType: string | null;
+  resourceId: string | null;
+  /** 脱敏后的变更摘要，不包含密码、令牌或完整密钥 */
+  detail: Record<string, unknown> | null;
+  ipAddress: string | null;
+  createdAt: string;
+}
+
+export interface AuditLogQuery {
+  action?: string;
+  operatorId?: string;
+  resourceType?: string;
+  /** ISO 时间，含起始与结束 */
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AuditLogPage {
+  items: AuditLog[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }

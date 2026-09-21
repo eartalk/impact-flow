@@ -7,6 +7,8 @@ import { PersistenceModule } from './infrastructure/persistence/persistence.modu
 import { AiConfigsModule } from './modules/ai-configs/ai-configs.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AutomationsModule } from './modules/automations/automations.module';
+import { WorkspacesModule } from './modules/workspaces/workspaces.module';
+import { AuditModule } from './modules/audit/audit.module';
 
 @Module({
   imports: [
@@ -20,6 +22,8 @@ import { AutomationsModule } from './modules/automations/automations.module';
     ProjectsModule,
     AnalysesModule,
     AutomationsModule,
+    WorkspacesModule,
+    AuditModule,
   ],
   controllers: [HealthController],
 })

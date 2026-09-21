@@ -24,6 +24,10 @@ import {
   AI_ANALYZER_GATEWAY,
   type AiAnalyzerGateway,
 } from '../../core/ports/ai-analyzer.gateway';
+import {
+  WORKSPACE_REPOSITORY,
+  type WorkspaceRepository,
+} from '../../core/ports/workspace.repository';
 
 @Injectable()
 export class AnalysesService implements OnApplicationBootstrap {
@@ -37,6 +41,8 @@ export class AnalysesService implements OnApplicationBootstrap {
     private readonly analyses: AnalysisRepository,
     @Inject(PROJECT_REPOSITORY)
     private readonly projects: ProjectRepository,
+    @Inject(WORKSPACE_REPOSITORY)
+    private readonly workspaces: WorkspaceRepository,
     @Inject(GIT_GATEWAY)
     private readonly git: GitGateway,
     @Inject(SYMBOL_ANALYZER_GATEWAY)
@@ -46,30 +52,33 @@ export class AnalysesService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap() {
-    const pending = await this.analyses.findPending();
+    // 应用启动恢复属系统级流程：无用户会话，任务记录本身即作用域的权威来源
+    const pending = await this.analyses.findPendingForWorker();
     for (const task of pending) this.enqueue(task.id);
     if (pending.length) {
       this.logger.log(`已恢复 ${pending.length} 个未完成分析任务`);
     }
-    const pendingAi = await this.analyses.findPendingAi();
+    const pendingAi = await this.analyses.findPendingAiForWorker();
     for (const task of pendingAi) this.enqueueAi(task.id);
     if (pendingAi.length) {
       this.logger.log(`已恢复 ${pendingAi.length} 个未完成 AI 分析任务`);
     }
-    const requestedAi = await this.analyses.findRequestedAi();
-    for (const task of requestedAi) await this.analyzeWithAi(task.id);
+    const requestedAi = await this.analyses.findRequestedAiForWorker();
+    for (const task of requestedAi) await this.queueAiAnalysis(task.id);
     if (requestedAi.length) {
       this.logger.log(`已恢复 ${requestedAi.length} 个待启动 AI 分析任务`);
     }
   }
 
-  list(workspaceId?: string) {
+  list(workspaceId: string) {
     return this.analyses.findAll(workspaceId);
   }
 
-  async listLogs(query: import('@impact-flow/contracts').AnalysisLogQuery, workspaceId?: string) {
+  async listLogs(
+    query: import('@impact-flow/contracts').AnalysisLogQuery,
+    workspaceId: string,
+  ) {
     if (
-      workspaceId &&
       query.projectId &&
       !(await this.projects.findById(query.projectId, workspaceId))
     ) {
@@ -78,7 +87,7 @@ export class AnalysesService implements OnApplicationBootstrap {
     return this.analyses.listLogs(query, workspaceId);
   }
 
-  async get(id: string, workspaceId?: string) {
+  async get(id: string, workspaceId: string) {
     const task = await this.analyses.findById(id, workspaceId);
     if (!task) throw new NotFoundException('分析任务不存在');
     return task;
@@ -86,13 +95,13 @@ export class AnalysesService implements OnApplicationBootstrap {
 
   async create(
     projectId: string,
-    workspaceId?: string,
+    workspaceId: string,
     options: { aiAnalysisRequested?: boolean } = {},
   ) {
     const project = await this.projects.findById(projectId, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
-    const activeTask = await this.analyses.findActiveByProject(projectId);
+    const activeTask = await this.analyses.findActiveByProject(projectId, workspaceId);
     if (activeTask) return activeTask;
 
     const targetCommit = project.detectedCommit;
@@ -130,14 +139,17 @@ export class AnalysesService implements OnApplicationBootstrap {
     return task;
   }
 
-  async rerun(id: string, workspaceId?: string) {
+  async rerun(id: string, workspaceId: string) {
     const source = await this.analyses.findById(id, workspaceId);
     if (!source) throw new NotFoundException('分析任务不存在');
 
     const project = await this.projects.findById(source.projectId, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
-    const activeTask = await this.analyses.findActiveByProject(source.projectId);
+    const activeTask = await this.analyses.findActiveByProject(
+      source.projectId,
+      workspaceId,
+    );
     if (activeTask) return activeTask;
 
     const task = await this.analyses.create({
@@ -167,12 +179,22 @@ export class AnalysesService implements OnApplicationBootstrap {
     return task;
   }
 
-  async analyzeWithAi(id: string, workspaceId?: string) {
+  async analyzeWithAi(id: string, workspaceId: string) {
     const task = await this.analyses.findById(id, workspaceId);
     if (!task) throw new NotFoundException('分析任务不存在');
     if (task.status !== 'SUCCESS') {
       throw new BadRequestException('请先完成变更分析，再执行 AI 分析');
     }
+    return this.queueAiAnalysis(id);
+  }
+
+  /**
+   * 系统级：启动 AI 分析。调用方必须已完成作用域校验
+   * （业务接口经 findById 校验，启动恢复经 findRequestedAiForWorker 取得任务）。
+   */
+  private async queueAiAnalysis(id: string) {
+    const task = await this.analyses.findByIdForWorkerTask(id);
+    if (!task) return null;
     if (task.aiAnalysis?.status === 'RUNNING' || this.aiRunning.has(id)) {
       return task;
     }
@@ -208,9 +230,11 @@ export class AnalysesService implements OnApplicationBootstrap {
   }
 
   private async process(taskId: string) {
-    const task = await this.analyses.findById(taskId);
+    // 任务执行器无用户会话：任务记录是作用域权威来源，
+    // 加载项目后必须使用 project.workspaceId 约束后续所有查询
+    const task = await this.analyses.findByIdForWorkerTask(taskId);
     if (!task || !['READY', 'RUNNING'].includes(task.status)) return;
-    const project = await this.projects.findById(task.projectId);
+    const project = await this.projects.findByIdForWorkerTask(task.projectId);
     if (!project) {
       await this.analyses.fail(taskId, '项目不存在或已被删除');
       return;
@@ -228,7 +252,9 @@ export class AnalysesService implements OnApplicationBootstrap {
       const impact = this.impactAnalyzer.analyze(result);
       let symbolAnalysis;
       try {
-        const relatedRepositories = (await this.projects.findAll())
+        // 关联仓库必须限定在与被分析项目相同的工作空间内，
+        // 否则会把其他工作空间的服务名与提交纳入本空间的分析结果
+        const relatedRepositories = (await this.projects.findAll(project.workspaceId))
           .filter((item) => item.id !== project.id && item.detectedCommit)
           .map((item) => ({
             projectId: item.id,
@@ -260,8 +286,12 @@ export class AnalysesService implements OnApplicationBootstrap {
         project.id,
         task.targetCommit,
       );
-      if (task.aiAnalysisRequested) {
-        await this.analyzeWithAi(task.id);
+      // 归档后不再触发自动 AI 链路：RUNNING 任务允许跑完，但后续动作冻结
+      if (
+        task.aiAnalysisRequested &&
+        (await this.workspaces.isActive(project.workspaceId))
+      ) {
+        await this.queueAiAnalysis(task.id);
       }
       this.logger.log(`分析任务 ${task.id} 执行完成`);
     } catch (error) {
@@ -272,11 +302,11 @@ export class AnalysesService implements OnApplicationBootstrap {
   }
 
   private async processAi(taskId: string) {
-    const task = await this.analyses.findById(taskId);
+    const task = await this.analyses.findByIdForWorkerTask(taskId);
     if (!task || task.status !== 'SUCCESS' || task.aiAnalysis?.status !== 'RUNNING') {
       return;
     }
-    const project = await this.projects.findById(task.projectId);
+    const project = await this.projects.findByIdForWorkerTask(task.projectId);
     if (!project) {
       await this.failAi(taskId, '项目不存在或已被删除');
       return;

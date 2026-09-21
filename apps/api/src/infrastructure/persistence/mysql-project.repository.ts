@@ -57,32 +57,63 @@ type InspectionLogSummaryRow = RowDataPacket & {
 export class MysqlProjectRepository implements ProjectRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async findAll(workspaceId?: string): Promise<Project[]> {
+  async findAll(workspaceId: string): Promise<Project[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<ProjectRow[]>(
-      `SELECT * FROM project ${workspaceId ? 'WHERE workspace_id = ?' : ''}
+      `SELECT * FROM project WHERE workspace_id = ?
        ORDER BY created_at DESC`,
-      workspaceId ? [workspaceId] : [],
+      [workspaceId],
     );
     return rows.map(this.map);
   }
 
-  async findById(id: string, workspaceId?: string): Promise<Project | null> {
+  async findAllForScheduler(): Promise<Project[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<ProjectRow[]>(
-      `SELECT * FROM project WHERE id = ?
-       ${workspaceId ? 'AND workspace_id = ?' : ''} LIMIT 1`,
-      workspaceId ? [id, workspaceId] : [id],
+      `SELECT p.* FROM project p
+       JOIN workspace w ON w.id = p.workspace_id
+       WHERE w.status = 'ACTIVE'
+       ORDER BY p.created_at DESC`,
+    );
+    return rows.map(this.map);
+  }
+
+  async findById(id: string, workspaceId: string): Promise<Project | null> {
+    const db = await this.database.connection();
+    const [rows] = await db.query<ProjectRow[]>(
+      `SELECT * FROM project WHERE id = ? AND workspace_id = ? LIMIT 1`,
+      [id, workspaceId],
     );
     return rows[0] ? this.map(rows[0]) : null;
   }
 
-  async findByCode(code: string, workspaceId?: string): Promise<Project | null> {
+  async findByIdForWorkerTask(id: string): Promise<Project | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<ProjectRow[]>(
-      `SELECT * FROM project WHERE code = ?
-       ${workspaceId ? 'AND workspace_id = ?' : ''} LIMIT 1`,
-      workspaceId ? [code, workspaceId] : [code],
+      'SELECT * FROM project WHERE id = ? LIMIT 1',
+      [id],
+    );
+    return rows[0] ? this.map(rows[0]) : null;
+  }
+
+  async findByCode(code: string, workspaceId: string): Promise<Project | null> {
+    const db = await this.database.connection();
+    const [rows] = await db.query<ProjectRow[]>(
+      `SELECT * FROM project WHERE code = ? AND workspace_id = ? LIMIT 1`,
+      [code, workspaceId],
+    );
+    return rows[0] ? this.map(rows[0]) : null;
+  }
+
+  /**
+   * 写操作后按主键回读。调用方已通过作用域查询确认过该行归属，
+   * 此处只是把更新结果读回来，因此不再重复过滤工作空间。
+   */
+  private async readById(id: string): Promise<Project | null> {
+    const db = await this.database.connection();
+    const [rows] = await db.query<ProjectRow[]>(
+      'SELECT * FROM project WHERE id = ? LIMIT 1',
+      [id],
     );
     return rows[0] ? this.map(rows[0]) : null;
   }
@@ -103,11 +134,11 @@ export class MysqlProjectRepository implements ProjectRepository {
         input.productionBranch,
       ],
     );
-    return (await this.findById(id))!;
+    return (await this.readById(id))!;
   }
 
   async update(id: string, input: UpdateProjectInput): Promise<Project> {
-    const current = await this.findById(id);
+    const current = await this.readById(id);
     if (!current) throw new Error(`Project ${id} not found`);
     const next = { ...current, ...input };
     const db = await this.database.connection();
@@ -137,7 +168,7 @@ export class MysqlProjectRepository implements ProjectRepository {
         [id],
       );
     }
-    return (await this.findById(id))!;
+    return (await this.readById(id))!;
   }
 
   async remove(id: string): Promise<void> {
@@ -193,7 +224,7 @@ export class MysqlProjectRepository implements ProjectRepository {
         id,
       ],
     );
-    return (await this.findById(id))!;
+    return (await this.readById(id))!;
   }
 
   async failInspection(id: string, errorMessage: string): Promise<Project> {
@@ -205,7 +236,7 @@ export class MysqlProjectRepository implements ProjectRepository {
        WHERE id = ?`,
       [errorMessage.slice(0, 2000), id],
     );
-    return (await this.findById(id))!;
+    return (await this.readById(id))!;
   }
 
   async createInspectionLog(
@@ -248,16 +279,15 @@ export class MysqlProjectRepository implements ProjectRepository {
     );
   }
 
-  async findInspectionLogs(query: InspectionLogQuery, workspaceId?: string): Promise<InspectionLogPage> {
+  async findInspectionLogs(
+    query: InspectionLogQuery,
+    workspaceId: string,
+  ): Promise<InspectionLogPage> {
     const db = await this.database.connection();
     const page = Math.max(Math.trunc(query.page ?? 1), 1);
     const pageSize = Math.min(Math.max(Math.trunc(query.pageSize ?? 10), 5), 50);
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    if (workspaceId) {
-      conditions.push('project.workspace_id = ?');
-      params.push(workspaceId);
-    }
+    const conditions: string[] = ['project.workspace_id = ?'];
+    const params: unknown[] = [workspaceId];
     if (query.projectId) {
       conditions.push('log.project_id = ?');
       params.push(query.projectId);

@@ -31,11 +31,19 @@ export class ProjectsService {
     private readonly notifications: PendingNotificationsService,
   ) {}
 
-  list(workspaceId?: string) {
+  list(workspaceId: string) {
     return this.projects.findAll(workspaceId);
   }
 
-  listInspectionLogs(query: InspectionLogQuery, workspaceId?: string) {
+  /**
+   * 系统级：定时调度器需要遍历全部工作空间的项目，再按 workspaceId 分别套用各空间的自动化策略。
+   * 这是唯一允许跨工作空间读取项目的入口，业务接口不得复用。
+   */
+  listForScheduler() {
+    return this.projects.findAllForScheduler();
+  }
+
+  listInspectionLogs(query: InspectionLogQuery, workspaceId: string) {
     return this.projects.findInspectionLogs(query, workspaceId);
   }
 
@@ -45,7 +53,7 @@ export class ProjectsService {
     return this.projects.cleanupInspectionLogs(olderThan);
   }
 
-  async testConnection(id: string, workspaceId?: string) {
+  async testConnection(id: string, workspaceId: string) {
     const project = await this.projects.findById(id, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
@@ -80,7 +88,7 @@ export class ProjectsService {
     return this.projects.create(workspaceId, input);
   }
 
-  async update(id: string, input: UpdateProjectInput, workspaceId?: string) {
+  async update(id: string, input: UpdateProjectInput, workspaceId: string) {
     const project = await this.projects.findById(id, workspaceId);
     if (!project) throw new NotFoundException('服务不存在');
 
@@ -93,7 +101,7 @@ export class ProjectsService {
     return this.projects.update(id, input);
   }
 
-  async remove(id: string, workspaceId?: string) {
+  async remove(id: string, workspaceId: string) {
     if (!(await this.projects.findById(id, workspaceId))) {
       throw new NotFoundException('服务不存在');
     }
@@ -109,7 +117,7 @@ export class ProjectsService {
     }
   }
 
-  async detectVersion(id: string, workspaceId?: string) {
+  async detectVersion(id: string, workspaceId: string) {
     const project = await this.projects.findById(id, workspaceId);
     if (!project) {
       throw new NotFoundException('项目不存在');
@@ -133,8 +141,8 @@ export class ProjectsService {
 
   async inspectVersion(
     id: string,
+    workspaceId: string,
     triggerType: InspectionTrigger = 'MANUAL',
-    workspaceId?: string,
   ): Promise<Project> {
     const running = this.inspections.get(id);
     if (running) return running;
@@ -146,17 +154,17 @@ export class ProjectsService {
     return inspection;
   }
 
-  async inspectAll(triggerType: InspectionTrigger = 'MANUAL', workspaceId?: string) {
+  async inspectAll(workspaceId: string, triggerType: InspectionTrigger = 'MANUAL') {
     const projects = await this.projects.findAll(workspaceId);
     return Promise.all(
-      projects.map((project) => this.inspectVersion(project.id, triggerType, workspaceId)),
+      projects.map((project) => this.inspectVersion(project.id, workspaceId, triggerType)),
     );
   }
 
   private async runInspection(
     id: string,
     triggerType: InspectionTrigger,
-    workspaceId?: string,
+    workspaceId: string,
   ): Promise<Project> {
     const project = await this.projects.findById(id, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');

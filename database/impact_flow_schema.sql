@@ -14,16 +14,26 @@ CREATE TABLE IF NOT EXISTS workspace (
   id CHAR(36) NOT NULL COMMENT '工作空间主键ID（UUID）',
   name VARCHAR(100) NOT NULL COMMENT '工作空间名称',
   code VARCHAR(100) NOT NULL COMMENT '工作空间唯一编码',
-  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT '状态：ACTIVE/DISABLED',
+  description VARCHAR(500) NULL COMMENT '工作空间描述',
+  owner_user_id CHAR(36) NULL COMMENT '当前所有者用户ID',
+  created_by CHAR(36) NULL COMMENT '创建用户ID',
+  updated_by CHAR(36) NULL COMMENT '最后修改用户ID',
+  archived_at DATETIME(3) NULL COMMENT '归档时间',
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT '状态：ACTIVE/ARCHIVED',
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
     ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_workspace_code (code)
+  UNIQUE KEY uk_workspace_code (code),
+  KEY idx_workspace_owner (owner_user_id),
+  KEY idx_workspace_status (status)
 ) ENGINE=InnoDB
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci
   COMMENT='工作空间表';
+-- 说明：owner_user_id / created_by / updated_by 指向 user_account，
+-- 但 workspace 在 user_account 之前创建，循环依赖无法在建表时声明，
+-- 相关外键统一在 workspace_member 建表之后补充。
 
 INSERT INTO workspace (id, name, code)
 VALUES ('00000000-0000-0000-0000-000000000001', '默认工作空间', 'default')
@@ -35,12 +45,14 @@ CREATE TABLE IF NOT EXISTS user_account (
   password_hash VARCHAR(500) NOT NULL COMMENT '密码哈希',
   display_name VARCHAR(100) NOT NULL COMMENT '用户显示名称',
   status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT '状态：ACTIVE/DISABLED',
+  last_workspace_id CHAR(36) NULL COMMENT '最后使用的工作空间ID',
   last_login_at DATETIME(3) NULL COMMENT '最近登录时间',
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
     ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_user_account_username (username)
+  UNIQUE KEY uk_user_account_username (username),
+  KEY idx_user_account_last_workspace (last_workspace_id)
 ) ENGINE=InnoDB
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci
@@ -51,7 +63,13 @@ CREATE TABLE IF NOT EXISTS workspace_member (
   user_id CHAR(36) NOT NULL COMMENT '用户ID',
   role VARCHAR(20) NOT NULL COMMENT '角色：OWNER/ADMIN/MEMBER/VIEWER',
   joined_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '加入时间',
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+    ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '成员关系更新时间',
+  owner_workspace_id CHAR(36)
+    GENERATED ALWAYS AS (IF(role = 'OWNER', workspace_id, NULL)) VIRTUAL
+    COMMENT '仅OWNER成员写入，用于唯一约束保证单所有者',
   PRIMARY KEY (workspace_id, user_id),
+  UNIQUE KEY uk_workspace_member_single_owner (owner_workspace_id),
   KEY idx_workspace_member_user (user_id),
   CONSTRAINT fk_workspace_member_workspace FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE,
   CONSTRAINT fk_workspace_member_user FOREIGN KEY (user_id) REFERENCES user_account (id) ON DELETE CASCADE
@@ -59,6 +77,20 @@ CREATE TABLE IF NOT EXISTS workspace_member (
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci
   COMMENT='工作空间成员表';
+
+-- workspace ⇄ user_account 之间存在循环引用，无法在建表语句里声明外键，
+-- 因此在两张表都创建完成（此处）统一补充。
+ALTER TABLE workspace
+  ADD CONSTRAINT fk_workspace_owner
+    FOREIGN KEY (owner_user_id) REFERENCES user_account (id) ON DELETE RESTRICT,
+  ADD CONSTRAINT fk_workspace_created_by
+    FOREIGN KEY (created_by) REFERENCES user_account (id) ON DELETE SET NULL,
+  ADD CONSTRAINT fk_workspace_updated_by
+    FOREIGN KEY (updated_by) REFERENCES user_account (id) ON DELETE SET NULL;
+
+ALTER TABLE user_account
+  ADD CONSTRAINT fk_user_account_last_workspace
+    FOREIGN KEY (last_workspace_id) REFERENCES workspace (id) ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS auth_session (
   id CHAR(36) NOT NULL COMMENT '会话主键ID（UUID）',

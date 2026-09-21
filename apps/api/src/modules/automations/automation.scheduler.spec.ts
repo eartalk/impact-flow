@@ -7,7 +7,7 @@ describe('AutomationScheduler', () => {
     const project = inspectedProject();
     const projects = {
       cleanupInspectionLogs: jest.fn().mockResolvedValue(undefined),
-      list: jest.fn().mockResolvedValue([project]),
+      listForScheduler: jest.fn().mockResolvedValue([project]),
       inspectVersion: jest.fn().mockResolvedValue(project),
     };
     const analyses = { create: jest.fn().mockResolvedValue(undefined) };
@@ -28,10 +28,12 @@ describe('AutomationScheduler', () => {
 
     await (scheduler as unknown as { inspect(): Promise<void> }).inspect();
 
+    // 调度器必须走显式的跨工作空间入口，而不是业务查询方法
+    expect(projects.listForScheduler).toHaveBeenCalled();
     expect(projects.inspectVersion).toHaveBeenCalledWith(
       project.id,
-      'SCHEDULED',
       project.workspaceId,
+      'SCHEDULED',
     );
     expect(analyses.create).toHaveBeenCalledWith(
       project.id,
@@ -43,7 +45,7 @@ describe('AutomationScheduler', () => {
   it('does not inspect or analyze projects when automatic inspection is disabled', async () => {
     const projects = {
       cleanupInspectionLogs: jest.fn().mockResolvedValue(undefined),
-      list: jest.fn().mockResolvedValue([inspectedProject()]),
+      listForScheduler: jest.fn().mockResolvedValue([inspectedProject()]),
       inspectVersion: jest.fn(),
     };
     const analyses = { create: jest.fn() };

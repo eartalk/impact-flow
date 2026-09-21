@@ -6,6 +6,7 @@
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
+    "verify:workspace-schema": "node scripts/verify-workspace-schema.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest --runInBand"
   },

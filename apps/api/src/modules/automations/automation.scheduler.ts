@@ -59,7 +59,8 @@ export class AutomationScheduler
         ? configuredRetention
         : 30;
       await this.projects.cleanupInspectionLogs(retentionDays);
-      const configuredProjects = await this.projects.list();
+      // 系统级：定时调度器需要跨工作空间遍历，再按每个项目所属空间套用各自的自动化策略
+      const configuredProjects = await this.projects.listForScheduler();
       const configurations = new Map<
         string,
         Promise<Awaited<ReturnType<AutomationPoliciesService['getConfig']>>>
@@ -79,8 +80,8 @@ export class AutomationScheduler
           return {
             project: await this.projects.inspectVersion(
               project.id,
-              'SCHEDULED',
               project.workspaceId,
+              'SCHEDULED',
             ),
             automation,
           };
