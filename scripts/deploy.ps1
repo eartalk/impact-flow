@@ -15,6 +15,8 @@ $ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Target = "$User@$Server"
 $Origin = if ($AppPort -eq 80) { "http://$Server" } else { "http://${Server}:$AppPort" }
 $KnownHostsFile = Join-Path $env:USERPROFILE ".ssh\known_hosts"
+$LocalEnvFile = Join-Path $ProjectDir ".env"
+$RemoteEnvUpload = "/tmp/impact-flow-env-$([guid]::NewGuid().ToString('N'))"
 
 if ($Branch -notmatch '^[A-Za-z0-9._/-]+$') {
     throw "Invalid Git branch name: $Branch"
@@ -27,6 +29,9 @@ if (-not (Test-Path -LiteralPath $IdentityFile)) {
 }
 if (-not (Test-Path -LiteralPath $GitIdentityFile)) {
     throw "Git SSH key does not exist: $GitIdentityFile"
+}
+if (-not (Test-Path -LiteralPath $LocalEnvFile)) {
+    throw "Local environment file does not exist: $LocalEnvFile"
 }
 
 Push-Location $ProjectDir
@@ -70,9 +75,15 @@ Write-Host "Uploading the Git deployment key to $Target..."
 scp -i $IdentityFile $GitIdentityFile "${Target}:~/.ssh/codeup_ed25519"
 if ($LASTEXITCODE -ne 0) { throw "Failed to upload the Git SSH key" }
 
+Write-Host "Uploading .env without adding it to Git..."
+scp -i $IdentityFile $LocalEnvFile "${Target}:$RemoteEnvUpload"
+if ($LASTEXITCODE -ne 0) { throw "Failed to upload .env" }
+
 $RemoteScript = @"
 set -Eeuo pipefail
+trap "rm -f '$RemoteEnvUpload'" EXIT
 chmod 600 ~/.ssh/codeup_ed25519
+chmod 600 '$RemoteEnvUpload'
 touch ~/.ssh/known_hosts
 chmod 600 ~/.ssh/known_hosts
 if ! ssh-keygen -F '$GitHubHostPattern' -f ~/.ssh/known_hosts >/dev/null || ! ssh-keygen -F 'codeup.aliyun.com' -f ~/.ssh/known_hosts >/dev/null; then
@@ -93,9 +104,6 @@ elif [[ -e '$RemoteDir' ]]; then
     mv "`$backup_dir" '$RemoteDir'
     exit 1
   fi
-  if [[ -f "`$backup_dir/.env.production" ]]; then
-    cp "`$backup_dir/.env.production" '$RemoteDir/.env.production'
-  fi
   if [[ -d "`$backup_dir/secrets" ]]; then
     cp -a "`$backup_dir/secrets" '$RemoteDir/secrets'
   fi
@@ -103,6 +111,27 @@ elif [[ -e '$RemoteDir' ]]; then
 else
   git clone --branch '$Branch' --single-branch '$Repository' '$RemoteDir'
   cd '$RemoteDir'
+fi
+
+# Preserve the server-generated encryption key so existing encrypted data
+# remains readable, while synchronizing all other settings from local .env.
+existing_encryption_key=''
+for existing_env in '$RemoteDir/.env' '$RemoteDir/.env.production' "`${backup_dir:-}/.env" "`${backup_dir:-}/.env.production"; do
+  if [[ -f "`$existing_env" ]]; then
+    candidate="`$(sed -n 's/^AI_CONFIG_ENCRYPTION_KEY=//p' "`$existing_env" | tail -1)"
+    if [[ -n "`$candidate" ]]; then
+      existing_encryption_key="`$candidate"
+      break
+    fi
+  fi
+done
+install -m 600 '$RemoteEnvUpload' '$RemoteDir/.env'
+if [[ -n "`$existing_encryption_key" ]]; then
+  if grep -q '^AI_CONFIG_ENCRYPTION_KEY=' '$RemoteDir/.env'; then
+    sed -i "s|^AI_CONFIG_ENCRYPTION_KEY=.*|AI_CONFIG_ENCRYPTION_KEY=`$existing_encryption_key|" '$RemoteDir/.env'
+  else
+    printf 'AI_CONFIG_ENCRYPTION_KEY=%s\n' "`$existing_encryption_key" >> '$RemoteDir/.env'
+  fi
 fi
 
 chmod +x scripts/deploy.sh

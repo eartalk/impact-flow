@@ -6,7 +6,7 @@ cd "$PROJECT_DIR"
 
 APP_PORT="${APP_PORT:-80}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-http://localhost:${APP_PORT}}"
-ENV_FILE="$PROJECT_DIR/.env.production"
+ENV_FILE="$PROJECT_DIR/.env"
 SECRETS_DIR="$PROJECT_DIR/secrets"
 
 command -v docker >/dev/null 2>&1 || { echo "错误: 未安装 Docker" >&2; exit 1; }
@@ -31,13 +31,20 @@ if [[ ! -s "$SECRETS_DIR/mysql_root_password" ]]; then
 fi
 chmod 600 "$SECRETS_DIR/mysql_password" "$SECRETS_DIR/mysql_root_password"
 
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
 if [[ ! -f "$ENV_FILE" ]]; then
   AI_CONFIG_ENCRYPTION_KEY="$(generate_secret)"
   umask 077
   cat > "$ENV_FILE" <<EOF
-APP_PORT=$APP_PORT
-WEB_ORIGIN=$PUBLIC_ORIGIN
-COOKIE_SECURE=false
 MYSQL_DATABASE=impact_flow
 MYSQL_USER=impact_flow
 VERSION_CHECK_ENABLED=true
@@ -63,9 +70,14 @@ ANALYSIS_RETRY_BASE_MS=5000
 WORKSPACE_CREATION_MODE=ANY_USER
 EOF
   echo "已创建 $ENV_FILE"
-else
-  sed -i "s|^APP_PORT=.*|APP_PORT=$APP_PORT|" "$ENV_FILE"
-  sed -i "s|^WEB_ORIGIN=.*|WEB_ORIGIN=$PUBLIC_ORIGIN|" "$ENV_FILE"
+fi
+
+set_env_value APP_PORT "$APP_PORT"
+set_env_value WEB_ORIGIN "$PUBLIC_ORIGIN"
+set_env_value COOKIE_SECURE "false"
+
+if ! grep -q '^AI_CONFIG_ENCRYPTION_KEY=..' "$ENV_FILE"; then
+  set_env_value AI_CONFIG_ENCRYPTION_KEY "$(generate_secret)"
 fi
 chmod 600 "$ENV_FILE"
 
@@ -85,4 +97,3 @@ echo "错误: 服务未能在预期时间内通过健康检查" >&2
 docker compose --env-file "$ENV_FILE" -f docker-compose.prod.yml ps >&2
 docker compose --env-file "$ENV_FILE" -f docker-compose.prod.yml logs --tail=100 >&2
 exit 1
-

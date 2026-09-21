@@ -19,10 +19,15 @@ The script refuses to deploy when the local worktree is dirty or when local
 the branch, builds the Docker images, recreates the services, and waits for the
 HTTP health check.
 
+The local `.env` file is transferred separately over SSH on every deployment.
+It is never committed to Git. Production-only connection values are overridden
+by Docker Compose, and the server keeps its existing `AI_CONFIG_ENCRYPTION_KEY`
+so previously encrypted configuration remains readable.
+
 On the first Git-based deployment, an existing non-Git deployment directory is
-renamed with a `.legacy-<timestamp>` suffix. `.env.production` and `secrets/`
-are copied into the new clone so that the existing database credentials and
-Docker volumes remain usable.
+renamed with a `.legacy-<timestamp>` suffix. The local `.env` and the existing
+server `secrets/` are copied into the new clone so that the existing database
+credentials and Docker volumes remain usable.
 
 ## Common options
 

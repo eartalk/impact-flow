@@ -31,7 +31,7 @@ services:
     image: impact-flow-api:latest
     restart: unless-stopped
     env_file:
-      - .env.production
+      - .env
     environment:
       NODE_ENV: production
       API_PORT: 3012
