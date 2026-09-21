@@ -24,6 +24,14 @@ services:
     networks:
       - backend
 
+  repository-init:
+    image: busybox:1.36.1
+    restart: "no"
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 1000:1000 /repositories"]
+    volumes:
+      - repository-cache:/repositories
+
   api:
     build:
       context: .
@@ -49,6 +57,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      repository-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3012/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
