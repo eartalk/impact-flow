@@ -28,6 +28,15 @@ export interface AnalysisRepository {
   findRequestedAiForWorker(): Promise<AnalysisTask[]>;
   /** 系统级：任务执行器加载任务，任务自身是作用域的权威来源 */
   findByIdForWorkerTask(id: string): Promise<AnalysisTask | null>;
+  /** 原子抢占一条到期任务；支持多实例 SKIP LOCKED 与过期租约恢复。 */
+  claimNextForWorker(workerId: string, leaseMs: number): Promise<AnalysisTask | null>;
+  /** 失败后重新排队；达到最大次数时转为最终 FAILED。 */
+  retryOrFail(
+    id: string,
+    workerId: string,
+    errorMessage: string,
+    nextAttemptAt: Date,
+  ): Promise<'RETRY' | 'FAILED'>;
   findActiveByProject(
     projectId: string,
     workspaceId: string,
@@ -51,6 +60,7 @@ export interface AnalysisRepository {
       symbolImpacts: NonNullable<AnalysisTask['symbolImpacts']>;
       changeEvidence: ChangeEvidence[];
     },
+    workerId?: string,
   ): Promise<AnalysisTask>;
   startAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask>;
   finishAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask>;

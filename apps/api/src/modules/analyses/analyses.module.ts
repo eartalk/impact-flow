@@ -5,12 +5,14 @@ import { AnalysesService } from './analyses.service';
 import { SYMBOL_ANALYZER_GATEWAY } from '../../core/ports/symbol-analyzer.gateway';
 import { TypeScriptSymbolAnalyzer } from '../../infrastructure/typescript/typescript-symbol.analyzer';
 import { AiConfigsModule } from '../ai-configs/ai-configs.module';
+import { AnalysisWorker } from './analysis.worker';
 
 @Module({
   imports: [ProjectsModule, AiConfigsModule],
   controllers: [AnalysesController],
   providers: [
     AnalysesService,
+    AnalysisWorker,
     TypeScriptSymbolAnalyzer,
     { provide: SYMBOL_ANALYZER_GATEWAY, useExisting: TypeScriptSymbolAnalyzer },
   ],

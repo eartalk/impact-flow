@@ -7,6 +7,7 @@
     "build": "nest build",
     "start": "node dist/main.js",
     "verify:workspace-schema": "node scripts/verify-workspace-schema.mjs",
+    "migrate": "node scripts/apply-migration.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest --runInBand"
   },

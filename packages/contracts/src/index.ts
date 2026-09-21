@@ -314,6 +314,9 @@ export interface AnalysisTask {
   files?: ChangedFile[];
   createdAt: string;
   finishedAt: string | null;
+  attemptCount?: number;
+  maxAttempts?: number;
+  nextAttemptAt?: string | null;
 }
 
 export type AnalysisLogType = 'CHANGE_ANALYSIS' | 'AI_ANALYSIS';

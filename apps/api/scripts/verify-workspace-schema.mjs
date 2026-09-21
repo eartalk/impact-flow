@@ -33,6 +33,11 @@ const requirements = [
   ['user_account', 'last_workspace_id'],
   ['workspace_member', 'updated_at'],
   ['workspace_member', 'owner_workspace_id'],
+  ['analysis_task', 'attempt_count'],
+  ['analysis_task', 'max_attempts'],
+  ['analysis_task', 'next_attempt_at'],
+  ['analysis_task', 'worker_id'],
+  ['analysis_task', 'lock_expires_at'],
 ];
 
 try {

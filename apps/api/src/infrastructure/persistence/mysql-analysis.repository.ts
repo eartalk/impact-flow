@@ -39,6 +39,9 @@ type AnalysisRow = RowDataPacket & {
   commit_summary: string | CommitSummary[] | null;
   created_at: string;
   finished_at: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
 };
 
 type ChangeFileRow = RowDataPacket & {
@@ -89,6 +92,82 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
 
   async findByIdForWorkerTask(id: string): Promise<AnalysisTask | null> {
     return this.findByIdInternal(id);
+  }
+
+  async claimNextForWorker(workerId: string, leaseMs: number) {
+    const db = await this.database.connection();
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.query<(RowDataPacket & { id: string })[]>(
+        `SELECT a.id
+         FROM analysis_task a
+         JOIN project p ON p.id = a.project_id
+         JOIN workspace w ON w.id = p.workspace_id
+         WHERE w.status = 'ACTIVE'
+           AND (
+             (a.status = 'READY' AND (a.next_attempt_at IS NULL OR a.next_attempt_at <= CURRENT_TIMESTAMP(3)))
+             OR (a.status = 'RUNNING' AND a.lock_expires_at < CURRENT_TIMESTAMP(3))
+           )
+           AND a.attempt_count < a.max_attempts
+         ORDER BY COALESCE(a.next_attempt_at, a.created_at), a.created_at
+         LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      );
+      const id = rows[0]?.id;
+      if (!id) {
+        await connection.commit();
+        return null;
+      }
+      await connection.execute(
+        `UPDATE analysis_task
+         SET status = 'RUNNING', attempt_count = attempt_count + 1,
+             worker_id = ?, locked_at = CURRENT_TIMESTAMP(3),
+             lock_expires_at = ?,
+             error_message = NULL, finished_at = NULL
+         WHERE id = ?`,
+        [workerId, new Date(Date.now() + leaseMs), id],
+      );
+      await connection.commit();
+      return this.findByIdInternal(id);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async retryOrFail(
+    id: string,
+    workerId: string,
+    errorMessage: string,
+    nextAttemptAt: Date,
+  ): Promise<'RETRY' | 'FAILED'> {
+    const db = await this.database.connection();
+    const [rows] = await db.query<(RowDataPacket & { attempt_count: number; max_attempts: number })[]>(
+      `SELECT attempt_count, max_attempts FROM analysis_task
+       WHERE id = ? AND worker_id = ? LIMIT 1`,
+      [id, workerId],
+    );
+    const row = rows[0];
+    if (!row) return 'FAILED';
+    const retry = row.attempt_count < row.max_attempts;
+    await db.execute(
+      `UPDATE analysis_task
+       SET status = ?, error_message = ?, next_attempt_at = ?,
+           worker_id = NULL, locked_at = NULL, lock_expires_at = NULL,
+           finished_at = ?
+       WHERE id = ? AND worker_id = ?`,
+      [
+        retry ? 'READY' : 'FAILED',
+        errorMessage.slice(0, 2000),
+        retry ? nextAttemptAt : null,
+        retry ? null : new Date(),
+        id,
+        workerId,
+      ],
+    );
+    return retry ? 'RETRY' : 'FAILED';
   }
 
   private async findByIdInternal(
@@ -302,19 +381,21 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       symbolImpacts: NonNullable<AnalysisTask['symbolImpacts']>;
       changeEvidence: ChangeEvidence[];
     },
+    workerId?: string,
   ): Promise<AnalysisTask> {
     const db = await this.database.connection();
     const connection = await db.getConnection();
     try {
       await connection.beginTransaction();
-      await connection.execute(
+      const [updated] = await connection.execute(
         `UPDATE analysis_task
          SET status = 'SUCCESS', commit_count = ?, changed_file_count = ?,
              additions = ?, deletions = ?, commit_summary = ?, risk_level = ?,
              risk_summary = ?, impacted_modules = ?, regression_suggestions = ?,
              symbol_summary = ?, symbol_changes = ?, symbol_impacts = ?, change_evidence = ?,
-             finished_at = CURRENT_TIMESTAMP(3)
-         WHERE id = ?`,
+             finished_at = CURRENT_TIMESTAMP(3), next_attempt_at = NULL,
+             worker_id = NULL, locked_at = NULL, lock_expires_at = NULL
+         WHERE id = ? ${workerId ? 'AND worker_id = ?' : ''}`,
         [
           result.commits.length,
           result.files.length,
@@ -330,8 +411,13 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
           JSON.stringify(result.symbolImpacts),
           JSON.stringify(result.changeEvidence),
           id,
+          ...(workerId ? [workerId] : []),
         ],
       );
+      if (!('affectedRows' in updated) || updated.affectedRows === 0) {
+        await connection.rollback();
+        return (await this.findByIdInternal(id))!;
+      }
       await this.insertFiles(connection, id, result.files);
       await connection.execute(
         `UPDATE \`release\` r
@@ -486,6 +572,11 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       createdAt: new Date(row.created_at).toISOString(),
       finishedAt: row.finished_at
         ? new Date(row.finished_at).toISOString()
+        : null,
+      attemptCount: Number(row.attempt_count ?? 0),
+      maxAttempts: Number(row.max_attempts ?? 3),
+      nextAttemptAt: row.next_attempt_at
+        ? new Date(row.next_attempt_at).toISOString()
         : null,
     };
   }

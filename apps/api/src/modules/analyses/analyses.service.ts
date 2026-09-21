@@ -4,7 +4,6 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-  OnApplicationBootstrap,
 } from '@nestjs/common';
 import {
   ANALYSIS_REPOSITORY,
@@ -30,9 +29,8 @@ import {
 } from '../../core/ports/workspace.repository';
 
 @Injectable()
-export class AnalysesService implements OnApplicationBootstrap {
+export class AnalysesService {
   private readonly logger = new Logger(AnalysesService.name);
-  private readonly running = new Set<string>();
   private readonly aiRunning = new Set<string>();
   private readonly impactAnalyzer = new ChangeImpactAnalyzer();
 
@@ -51,13 +49,7 @@ export class AnalysesService implements OnApplicationBootstrap {
     private readonly aiAnalyzer: AiAnalyzerGateway,
   ) {}
 
-  async onApplicationBootstrap() {
-    // 应用启动恢复属系统级流程：无用户会话，任务记录本身即作用域的权威来源
-    const pending = await this.analyses.findPendingForWorker();
-    for (const task of pending) this.enqueue(task.id);
-    if (pending.length) {
-      this.logger.log(`已恢复 ${pending.length} 个未完成分析任务`);
-    }
+  async recoverPendingAiTasks() {
     const pendingAi = await this.analyses.findPendingAiForWorker();
     for (const task of pendingAi) this.enqueueAi(task.id);
     if (pendingAi.length) {
@@ -214,11 +206,8 @@ export class AnalysesService implements OnApplicationBootstrap {
   }
 
   private enqueue(taskId: string) {
-    if (this.running.has(taskId)) return;
-    this.running.add(taskId);
-    setImmediate(() => {
-      void this.process(taskId).finally(() => this.running.delete(taskId));
-    });
+    // 基础分析由持久化 Worker 轮询并原子抢占；保留入口便于旧调用方兼容。
+    void taskId;
   }
 
   private enqueueAi(taskId: string) {
@@ -229,18 +218,24 @@ export class AnalysesService implements OnApplicationBootstrap {
     });
   }
 
-  private async process(taskId: string) {
+  private process(taskId: string) {
+    return this.processClaimed(taskId);
+  }
+
+  async processClaimed(taskId: string, workerId?: string) {
     // 任务执行器无用户会话：任务记录是作用域权威来源，
     // 加载项目后必须使用 project.workspaceId 约束后续所有查询
     const task = await this.analyses.findByIdForWorkerTask(taskId);
     if (!task || !['READY', 'RUNNING'].includes(task.status)) return;
     const project = await this.projects.findByIdForWorkerTask(task.projectId);
     if (!project) {
-      await this.analyses.fail(taskId, '项目不存在或已被删除');
+      const error = new Error('项目不存在或已被删除');
+      if (workerId) throw error;
+      await this.analyses.fail(taskId, error.message);
       return;
     }
 
-    await this.analyses.markRunning(taskId);
+    if (!workerId) await this.analyses.markRunning(taskId);
     try {
       const result = await this.git.analyzeRange({
         projectId: project.id,
@@ -277,11 +272,13 @@ export class AnalysesService implements OnApplicationBootstrap {
           symbolImpacts: [],
         };
       }
-      await this.analyses.complete(task.id, {
+      const completed = await this.analyses.complete(task.id, {
         ...result,
         ...impact,
         ...symbolAnalysis,
-      });
+      }, workerId);
+      // 租约已超时或被其他 Worker 接管时，迟到结果不得推进项目基线。
+      if (completed.status !== 'SUCCESS') return;
       await this.projects.updateLastAnalyzedCommit(
         project.id,
         task.targetCommit,
@@ -296,6 +293,7 @@ export class AnalysesService implements OnApplicationBootstrap {
       this.logger.log(`分析任务 ${task.id} 执行完成`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (workerId) throw error;
       await this.analyses.fail(task.id, message);
       this.logger.error(`分析任务 ${task.id} 执行失败：${message}`);
     }
