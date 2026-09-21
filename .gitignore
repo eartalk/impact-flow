@@ -11,3 +11,6 @@ var/repositories/
 output/
 *.log
 .DS_Store
+.workbuddy
+.env.production
+secrets/

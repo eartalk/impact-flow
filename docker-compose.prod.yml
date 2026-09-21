@@ -1,0 +1,86 @@
+name: impact-flow
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-impact_flow}
+      MYSQL_USER: ${MYSQL_USER:-impact_flow}
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./database/impact_flow_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+      - ./secrets/mysql_password:/run/secrets/mysql_password:ro
+      - ./secrets/mysql_root_password:/run/secrets/mysql_root_password:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} --password=$$(cat /run/secrets/mysql_password) --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    networks:
+      - backend
+
+  api:
+    build:
+      context: .
+      target: api
+    image: impact-flow-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      API_PORT: 3012
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+      DATABASE_NAME: ${MYSQL_DATABASE:-impact_flow}
+      DATABASE_USER: ${MYSQL_USER:-impact_flow}
+      DATABASE_PASSWORD_FILE: /run/secrets/mysql_password
+      REPOSITORY_CACHE_DIR: /app/var/repositories
+      GIT_SSH_COMMAND: ssh -i /home/node/.ssh/codeup_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/home/node/.ssh/known_hosts
+    volumes:
+      - repository-cache:/app/var/repositories
+      - ./secrets/mysql_password:/run/secrets/mysql_password:ro
+      - ${HOME}/.ssh:/home/node/.ssh:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3012/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - backend
+
+  web:
+    build:
+      context: .
+      target: web
+    image: impact-flow-web:latest
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks:
+      - backend
+
+volumes:
+  mysql-data:
+  repository-cache:
+
+networks:
+  backend:
+    driver: bridge

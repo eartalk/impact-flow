@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$PROJECT_DIR"
+
+APP_PORT="${APP_PORT:-80}"
+PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-http://localhost:${APP_PORT}}"
+ENV_FILE="$PROJECT_DIR/.env.production"
+SECRETS_DIR="$PROJECT_DIR/secrets"
+
+command -v docker >/dev/null 2>&1 || { echo "错误: 未安装 Docker" >&2; exit 1; }
+docker compose version >/dev/null 2>&1 || { echo "错误: 未安装 Docker Compose" >&2; exit 1; }
+
+mkdir -p "$SECRETS_DIR"
+chmod 700 "$SECRETS_DIR"
+
+generate_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+if [[ ! -s "$SECRETS_DIR/mysql_password" ]]; then
+  generate_secret > "$SECRETS_DIR/mysql_password"
+fi
+if [[ ! -s "$SECRETS_DIR/mysql_root_password" ]]; then
+  generate_secret > "$SECRETS_DIR/mysql_root_password"
+fi
+chmod 600 "$SECRETS_DIR/mysql_password" "$SECRETS_DIR/mysql_root_password"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  AI_CONFIG_ENCRYPTION_KEY="$(generate_secret)"
+  umask 077
+  cat > "$ENV_FILE" <<EOF
+APP_PORT=$APP_PORT
+WEB_ORIGIN=$PUBLIC_ORIGIN
+COOKIE_SECURE=false
+MYSQL_DATABASE=impact_flow
+MYSQL_USER=impact_flow
+VERSION_CHECK_ENABLED=true
+VERSION_CHECK_INTERVAL_MS=300000
+INSPECTION_LOG_RETENTION_DAYS=30
+SYMBOL_ANALYSIS_MAX_FILES=1500
+SYMBOL_ANALYSIS_MAX_RELATED_PROJECTS=5
+SYMBOL_ANALYSIS_RELATED_MAX_FILES=500
+AI_ANALYSIS_ENABLED=false
+AI_API_BASE_URL=https://api.openai.com/v1
+AI_API_FORMAT=OPENAI
+AI_API_KEY=
+AI_MODEL=
+AI_ANALYSIS_TIMEOUT_MS=90000
+AI_ANALYSIS_MAX_FILES=80
+AI_ANALYSIS_MAX_SYMBOLS=50
+AI_CONFIG_ENCRYPTION_KEY=$AI_CONFIG_ENCRYPTION_KEY
+ANALYSIS_WORKER_ENABLED=true
+ANALYSIS_WORKER_CONCURRENCY=2
+ANALYSIS_WORKER_POLL_INTERVAL_MS=1000
+ANALYSIS_TASK_TIMEOUT_MS=600000
+ANALYSIS_RETRY_BASE_MS=5000
+WORKSPACE_CREATION_MODE=ANY_USER
+EOF
+  echo "已创建 $ENV_FILE"
+else
+  sed -i "s|^APP_PORT=.*|APP_PORT=$APP_PORT|" "$ENV_FILE"
+  sed -i "s|^WEB_ORIGIN=.*|WEB_ORIGIN=$PUBLIC_ORIGIN|" "$ENV_FILE"
+fi
+chmod 600 "$ENV_FILE"
+
+docker compose --env-file "$ENV_FILE" -f docker-compose.prod.yml up -d --build --remove-orphans
+docker compose --env-file "$ENV_FILE" -f docker-compose.prod.yml ps
+
+echo "等待服务健康检查..."
+for attempt in {1..30}; do
+  if curl --fail --silent --show-error "http://127.0.0.1:${APP_PORT}/api/health" >/dev/null; then
+    echo "部署成功: $PUBLIC_ORIGIN"
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "错误: 服务未能在预期时间内通过健康检查" >&2
+docker compose --env-file "$ENV_FILE" -f docker-compose.prod.yml ps >&2
+docker compose --env-file "$ENV_FILE" -f docker-compose.prod.yml logs --tail=100 >&2
+exit 1
+
