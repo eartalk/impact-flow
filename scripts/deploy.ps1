@@ -93,6 +93,7 @@ export GIT_SSH_COMMAND="ssh -i `$HOME/.ssh/codeup_ed25519 -o IdentitiesOnly=yes 
 
 if [[ -d '$RemoteDir/.git' ]]; then
   cd '$RemoteDir'
+  git config core.fileMode false
   git remote set-url origin '$Repository'
   git fetch origin '$Branch'
   git checkout '$Branch'
@@ -112,6 +113,8 @@ else
   git clone --branch '$Branch' --single-branch '$Repository' '$RemoteDir'
   cd '$RemoteDir'
 fi
+
+git config core.fileMode false
 
 # Preserve the server-generated encryption key so existing encrypted data
 # remains readable, while synchronizing all other settings from local .env.
@@ -134,10 +137,9 @@ if [[ -n "`$existing_encryption_key" ]]; then
   fi
 fi
 
-chmod +x scripts/deploy.sh
-APP_PORT='$AppPort' PUBLIC_ORIGIN='$Origin' ./scripts/deploy.sh
-printf 'Deployed commit: '
-git rev-parse --short HEAD
+deployed_commit="`$(git rev-parse --short HEAD)"
+APP_PORT='$AppPort' PUBLIC_ORIGIN='$Origin' bash scripts/deploy.sh
+printf 'Deployed commit: %s\n' "`$deployed_commit"
 "@
 
 Write-Host "Pulling origin/$Branch and deploying on the server..."
