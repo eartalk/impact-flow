@@ -109,6 +109,58 @@ export interface PendingNotificationConnectionTest {
   checkedAt: string;
 }
 
+export type AutomationCode =
+  | 'AUTO_VERSION_INSPECTION'
+  | 'AUTO_CHANGE_ANALYSIS_AFTER_INSPECTION'
+  | 'AUTO_AI_ANALYSIS_AFTER_CHANGE_ANALYSIS';
+
+export interface AutomationConfig {
+  autoInspectionEnabled: boolean;
+  autoChangeAnalysisEnabled: boolean;
+  autoAiAnalysisEnabled: boolean;
+  updatedAt: string | null;
+}
+
+export interface UpdateAutomationConfigInput {
+  autoInspectionEnabled: boolean;
+  autoChangeAnalysisEnabled: boolean;
+  autoAiAnalysisEnabled: boolean;
+}
+
+export type NotificationDeliveryStatus = 'SUCCESS' | 'FAILED';
+
+export type NotificationChannel = 'DINGTALK';
+
+export interface NotificationDeliveryLog {
+  id: string;
+  projectId: string;
+  projectName: string | null;
+  projectCode: string | null;
+  targetCommit: string;
+  shortCommit: string;
+  channel: NotificationChannel;
+  attempt: number;
+  status: NotificationDeliveryStatus;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface NotificationDeliveryLogQuery {
+  projectId?: string;
+  status?: NotificationDeliveryStatus;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface NotificationDeliveryLogPage {
+  items: NotificationDeliveryLog[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export type CodeSymbolKind =
   | 'CLASS'
   | 'METHOD'
@@ -255,6 +307,7 @@ export interface AnalysisTask {
   symbolImpacts?: SymbolImpact[];
   changeEvidence?: ChangeEvidence[];
   aiAnalysis?: AiAnalysisResult | null;
+  aiAnalysisRequested: boolean;
   commits?: CommitSummary[];
   files?: ChangedFile[];
   createdAt: string;
@@ -262,6 +315,8 @@ export interface AnalysisTask {
 }
 
 export type AnalysisLogType = 'CHANGE_ANALYSIS' | 'AI_ANALYSIS';
+
+export type AnalysisLogStatus = AnalysisStatus | AiAnalysisStatus;
 
 export interface AnalysisExecutionLog {
   id: string;
@@ -281,8 +336,9 @@ export interface AnalysisExecutionLog {
 }
 
 export interface AnalysisLogQuery {
-  projectId: string;
   type: AnalysisLogType;
+  projectId?: string;
+  status?: AnalysisLogStatus;
   page?: number;
   pageSize?: number;
 }

@@ -1,7 +1,8 @@
-import { BadGatewayException, Injectable } from '@nestjs/common';
-import type {
-  NotificationGateway,
-  PendingChangeNotification,
+import { Injectable } from '@nestjs/common';
+import {
+  NotificationDeliveryError,
+  type NotificationGateway,
+  type PendingChangeNotification,
 } from '../../core/ports/notification.gateway';
 
 type DingTalkResponse = {
@@ -48,13 +49,20 @@ export class DingTalkNotificationAdapter implements NotificationGateway {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new BadGatewayException('钉钉 Webhook 请求失败：' + message);
+      throw new NotificationDeliveryError(
+        '钉钉 Webhook 请求失败：' + message,
+        'NETWORK',
+      );
     }
     const payload = (await response.json().catch(() => ({}))) as DingTalkResponse;
     if (!response.ok || payload.errcode !== 0) {
-      throw new BadGatewayException(
-        '钉钉 Webhook 返回失败：' +
-          (payload.errmsg || 'HTTP ' + response.status),
+      const code =
+        payload.errcode !== undefined && payload.errcode !== 0
+          ? String(payload.errcode)
+          : 'HTTP_' + response.status;
+      throw new NotificationDeliveryError(
+        '钉钉 Webhook 返回失败：' + (payload.errmsg || 'HTTP ' + response.status),
+        code,
       );
     }
   }
@@ -64,7 +72,7 @@ export class DingTalkNotificationAdapter implements NotificationGateway {
     try {
       url = new URL(value.trim());
     } catch {
-      throw new BadGatewayException('钉钉 Webhook 地址格式不正确');
+      throw new NotificationDeliveryError('钉钉 Webhook 地址格式不正确', 'INVALID_WEBHOOK');
     }
     const allowedHosts = new Set(['oapi.dingtalk.com', 'api.dingtalk.com']);
     if (
@@ -72,7 +80,7 @@ export class DingTalkNotificationAdapter implements NotificationGateway {
       !allowedHosts.has(url.hostname.toLowerCase()) ||
       !url.pathname.includes('/robot/send')
     ) {
-      throw new BadGatewayException('仅支持钉钉机器人 HTTPS Webhook');
+      throw new NotificationDeliveryError('仅支持钉钉机器人 HTTPS Webhook', 'INVALID_WEBHOOK');
     }
     return url.toString();
   }

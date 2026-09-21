@@ -12,6 +12,8 @@ import { MysqlPendingNotificationRepository } from './mysql-pending-notification
 import { IDENTITY_REPOSITORY } from '../../core/ports/identity.repository';
 import { MysqlIdentityRepository } from './mysql-identity.repository';
 import { PasswordHasher } from '../security/password-hasher';
+import { AUTOMATION_POLICY_REPOSITORY } from '../../core/ports/automation-policy.repository';
+import { MysqlAutomationPolicyRepository } from './mysql-automation-policy.repository';
 
 @Global()
 @Module({
@@ -22,6 +24,7 @@ import { PasswordHasher } from '../security/password-hasher';
     MysqlAiConfigRepository,
     MysqlPendingNotificationRepository,
     MysqlIdentityRepository,
+    MysqlAutomationPolicyRepository,
     SecretCipher,
     PasswordHasher,
     {
@@ -44,6 +47,10 @@ import { PasswordHasher } from '../security/password-hasher';
       provide: IDENTITY_REPOSITORY,
       useExisting: MysqlIdentityRepository,
     },
+    {
+      provide: AUTOMATION_POLICY_REPOSITORY,
+      useExisting: MysqlAutomationPolicyRepository,
+    },
   ],
   exports: [
     PROJECT_REPOSITORY,
@@ -51,6 +58,7 @@ import { PasswordHasher } from '../security/password-hasher';
     AI_CONFIG_REPOSITORY,
     PENDING_NOTIFICATION_REPOSITORY,
     IDENTITY_REPOSITORY,
+    AUTOMATION_POLICY_REPOSITORY,
     DatabaseService,
     SecretCipher,
     PasswordHasher,

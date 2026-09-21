@@ -16,8 +16,9 @@ export interface AnalysisRepository {
   findById(id: string, workspaceId?: string): Promise<AnalysisTask | null>;
   findPending(): Promise<AnalysisTask[]>;
   findPendingAi(): Promise<AnalysisTask[]>;
+  findRequestedAi(): Promise<AnalysisTask[]>;
   findActiveByProject(projectId: string): Promise<AnalysisTask | null>;
-  listLogs(query: AnalysisLogQuery): Promise<AnalysisLogPage>;
+  listLogs(query: AnalysisLogQuery, workspaceId?: string): Promise<AnalysisLogPage>;
   create(input: Omit<AnalysisTask, 'id' | 'createdAt'>): Promise<AnalysisTask>;
   markRunning(id: string): Promise<AnalysisTask>;
   complete(

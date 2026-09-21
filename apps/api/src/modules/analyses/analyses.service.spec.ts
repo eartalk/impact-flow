@@ -157,6 +157,135 @@ describe('AnalysesService', () => {
     expect(analyses.complete).toHaveBeenCalled();
     expect(aiAnalyzer.analyze).not.toHaveBeenCalled();
   });
+
+  it('queues AI after an automatically requested change analysis succeeds', async () => {
+    const source = analysisTask({
+      status: 'READY',
+      aiAnalysisRequested: true,
+      finishedAt: null,
+    });
+    const completed = analysisTask({
+      status: 'SUCCESS',
+      aiAnalysisRequested: true,
+    });
+    const analyses = {
+      findById: jest
+        .fn()
+        .mockResolvedValueOnce(source)
+        .mockResolvedValueOnce(completed),
+      markRunning: jest.fn(),
+      complete: jest.fn().mockResolvedValue(completed),
+      startAiAnalysis: jest.fn().mockResolvedValue(
+        analysisTask({
+          aiAnalysisRequested: true,
+          aiAnalysis: {
+            status: 'RUNNING',
+            summary: null,
+            riskLevel: null,
+            keyFindings: [],
+            regressionSuggestions: [],
+            model: null,
+            analyzedAt: null,
+            errorMessage: null,
+          },
+        }),
+      ),
+      fail: jest.fn(),
+    };
+    const projects = {
+      findById: jest.fn().mockResolvedValue({
+        id: source.projectId,
+        name: source.projectName,
+        repositoryUrl: 'https://example.test/repository.git',
+        productionBranch: 'production',
+      }),
+      findAll: jest.fn().mockResolvedValue([]),
+      updateLastAnalyzedCommit: jest.fn(),
+    };
+    const git = {
+      analyzeRange: jest.fn().mockResolvedValue({
+        commits: [],
+        files: [{
+          path: 'src/order.service.ts',
+          oldPath: null,
+          changeType: 'M',
+          additions: 3,
+          deletions: 1,
+        }],
+        additions: 3,
+        deletions: 1,
+      }),
+    };
+    const symbols = {
+      analyzeRange: jest.fn().mockResolvedValue({
+        symbolSummary: '识别到 1 个变更 Symbol',
+        symbolChanges: [],
+        symbolImpacts: [],
+      }),
+    };
+    const service = new AnalysesService(
+      analyses as never,
+      projects as never,
+      git as never,
+      symbols as never,
+      {} as never,
+    );
+    const enqueueAi = jest
+      .spyOn(service as unknown as { enqueueAi(id: string): void }, 'enqueueAi')
+      .mockImplementation(() => undefined);
+
+    await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
+
+    expect(analyses.startAiAnalysis).toHaveBeenCalledWith(
+      source.id,
+      expect.objectContaining({ status: 'RUNNING' }),
+    );
+    expect(enqueueAi).toHaveBeenCalledWith(source.id);
+  });
+  it('lists workspace logs without requiring a project filter', async () => {
+    const analyses = {
+      listLogs: jest.fn().mockResolvedValue({
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 10,
+        totalPages: 1,
+      }),
+    };
+    const projects = { findById: jest.fn() };
+    const service = new AnalysesService(
+      analyses as never,
+      projects as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await service.listLogs({ type: 'CHANGE_ANALYSIS', status: 'FAILED' }, 'workspace-1');
+
+    expect(projects.findById).not.toHaveBeenCalled();
+    expect(analyses.listLogs).toHaveBeenCalledWith(
+      { type: 'CHANGE_ANALYSIS', status: 'FAILED' },
+      'workspace-1',
+    );
+  });
+
+  it('rejects log queries scoped to a project outside the workspace', async () => {
+    const analyses = { listLogs: jest.fn() };
+    const projects = { findById: jest.fn().mockResolvedValue(null) };
+    const service = new AnalysesService(
+      analyses as never,
+      projects as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.listLogs({ type: 'AI_ANALYSIS', projectId: 'foreign-project' }, 'workspace-1'),
+    ).rejects.toThrow('项目不存在');
+    expect(analyses.listLogs).not.toHaveBeenCalled();
+  });
 });
 
 function analysisTask(overrides: Partial<AnalysisTask> = {}): AnalysisTask {
@@ -183,5 +312,6 @@ function analysisTask(overrides: Partial<AnalysisTask> = {}): AnalysisTask {
     createdAt: new Date().toISOString(),
     finishedAt: new Date().toISOString(),
     ...overrides,
+    aiAnalysisRequested: overrides.aiAnalysisRequested ?? false,
   };
 }

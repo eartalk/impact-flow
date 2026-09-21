@@ -1,4 +1,5 @@
 import { DingTalkNotificationAdapter } from './dingtalk-notification.adapter';
+import { NotificationDeliveryError } from '../../core/ports/notification.gateway';
 
 describe('DingTalkNotificationAdapter', () => {
   const originalFetch = global.fetch;
@@ -43,5 +44,39 @@ describe('DingTalkNotificationAdapter', () => {
           '[通知] 服务: 订单服务 分支: production 待检测提交: 1个',
       },
     });
+  });
+
+  it('surfaces the dingtalk errcode for delivery logging', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest
+        .fn()
+        .mockResolvedValue({ errcode: 300001, errmsg: 'invalid token' }),
+    }) as unknown as typeof fetch;
+    const adapter = new DingTalkNotificationAdapter();
+
+    const error = await adapter
+      .test('https://oapi.dingtalk.com/robot/send?access_token=test-token')
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(NotificationDeliveryError);
+    expect((error as NotificationDeliveryError).code).toBe('300001');
+    expect((error as NotificationDeliveryError).message).toContain('invalid token');
+  });
+
+  it('falls back to an HTTP status code when errcode is absent', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: jest.fn().mockResolvedValue({}),
+    }) as unknown as typeof fetch;
+    const adapter = new DingTalkNotificationAdapter();
+
+    const error = await adapter
+      .test('https://oapi.dingtalk.com/robot/send?access_token=test-token')
+      .catch((thrown: unknown) => thrown);
+
+    expect((error as NotificationDeliveryError).code).toBe('HTTP_503');
   });
 });

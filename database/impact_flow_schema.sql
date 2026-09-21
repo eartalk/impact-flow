@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS analysis_task (
   symbol_impacts JSON NULL COMMENT 'TypeScript Symbol调用影响列表（JSON）',
   change_evidence JSON NULL COMMENT '变更证据与调用链信息（JSON）',
   ai_analysis JSON NULL COMMENT 'AI分析结果（JSON）',
+  ai_analysis_requested TINYINT(1) NOT NULL DEFAULT 0 COMMENT '变更分析成功后是否自动执行AI分析',
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '任务创建时间',
   finished_at DATETIME(3) NULL COMMENT '任务完成时间',
   PRIMARY KEY (id),
@@ -264,21 +265,54 @@ INSERT INTO pending_notification_config (workspace_id, enabled)
 VALUES ('00000000-0000-0000-0000-000000000001', 0)
 ON DUPLICATE KEY UPDATE workspace_id = VALUES(workspace_id);
 
+CREATE TABLE IF NOT EXISTS workspace_automation_policy (
+  workspace_id CHAR(36) NOT NULL COMMENT '所属工作空间ID',
+  automation_code VARCHAR(100) NOT NULL COMMENT '自动化策略编码',
+  enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用：0否/1是',
+  settings JSON NULL COMMENT '自动化策略非敏感参数（JSON）',
+  config_version INT NOT NULL DEFAULT 1 COMMENT '配置结构版本',
+  updated_by CHAR(36) NULL COMMENT '最后修改用户ID',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+    ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+  PRIMARY KEY (workspace_id, automation_code),
+  CONSTRAINT fk_automation_policy_workspace
+    FOREIGN KEY (workspace_id) REFERENCES workspace (id) ON DELETE CASCADE,
+  CONSTRAINT fk_automation_policy_updater
+    FOREIGN KEY (updated_by) REFERENCES user_account (id) ON DELETE SET NULL
+) ENGINE=InnoDB
+  DEFAULT CHARACTER SET utf8mb4
+  COLLATE utf8mb4_0900_ai_ci
+  COMMENT='工作空间自动化策略表';
+
 CREATE TABLE IF NOT EXISTS pending_notification_delivery (
-  id CHAR(36) NOT NULL COMMENT '通知投递记录主键ID（UUID）',
+  id CHAR(36) NOT NULL COMMENT '投递记录主键ID（UUID）',
+  workspace_id CHAR(36) NOT NULL COMMENT '所属工作空间ID',
   project_id CHAR(36) NOT NULL COMMENT '关联服务ID',
-  target_commit VARCHAR(64) NOT NULL COMMENT '已通知的目标提交SHA',
-  delivered_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '通知成功投递时间',
+  target_commit VARCHAR(64) NOT NULL COMMENT '通知对应的目标提交SHA',
+  channel VARCHAR(20) NOT NULL DEFAULT 'DINGTALK' COMMENT '通知渠道：DINGTALK',
+  attempt INT NOT NULL DEFAULT 1 COMMENT '该提交的第几次投递尝试',
+  status VARCHAR(20) NOT NULL COMMENT '投递结果：SUCCESS/FAILED',
+  error_code VARCHAR(64) NULL COMMENT '失败错误码（钉钉errcode、HTTP状态或网关错误标识）',
+  error_message VARCHAR(1000) NULL COMMENT '失败原因',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '投递尝试时间',
+  delivered_commit VARCHAR(64)
+    GENERATED ALWAYS AS (IF(status = 'SUCCESS', target_commit, NULL)) STORED
+    COMMENT '成功投递标记：成功时等于target_commit，失败为NULL，用于唯一约束',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_pending_notification_delivery (project_id, target_commit),
-  KEY idx_pending_notification_delivery_time (delivered_at),
+  UNIQUE KEY uk_pending_notification_delivered (project_id, delivered_commit),
+  KEY idx_pending_notification_workspace_time (workspace_id, created_at),
+  KEY idx_pending_notification_project_time (project_id, created_at),
   CONSTRAINT fk_pending_notification_delivery_project
     FOREIGN KEY (project_id) REFERENCES project (id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_pending_notification_delivery_workspace
+    FOREIGN KEY (workspace_id) REFERENCES workspace (id)
     ON DELETE CASCADE
 ) ENGINE=InnoDB
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci
-  COMMENT='待检测通知成功投递记录表';
+  COMMENT='待检测通知投递记录表（成功与失败尝试）';
 
 CREATE TABLE IF NOT EXISTS change_file (
   id CHAR(36) NOT NULL COMMENT '变更文件主键ID（UUID）',

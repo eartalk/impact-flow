@@ -56,6 +56,11 @@ export class AnalysesService implements OnApplicationBootstrap {
     if (pendingAi.length) {
       this.logger.log(`已恢复 ${pendingAi.length} 个未完成 AI 分析任务`);
     }
+    const requestedAi = await this.analyses.findRequestedAi();
+    for (const task of requestedAi) await this.analyzeWithAi(task.id);
+    if (requestedAi.length) {
+      this.logger.log(`已恢复 ${requestedAi.length} 个待启动 AI 分析任务`);
+    }
   }
 
   list(workspaceId?: string) {
@@ -63,10 +68,14 @@ export class AnalysesService implements OnApplicationBootstrap {
   }
 
   async listLogs(query: import('@impact-flow/contracts').AnalysisLogQuery, workspaceId?: string) {
-    if (workspaceId && !(await this.projects.findById(query.projectId, workspaceId))) {
+    if (
+      workspaceId &&
+      query.projectId &&
+      !(await this.projects.findById(query.projectId, workspaceId))
+    ) {
       throw new NotFoundException('项目不存在');
     }
-    return this.analyses.listLogs(query);
+    return this.analyses.listLogs(query, workspaceId);
   }
 
   async get(id: string, workspaceId?: string) {
@@ -75,7 +84,11 @@ export class AnalysesService implements OnApplicationBootstrap {
     return task;
   }
 
-  async create(projectId: string, workspaceId?: string) {
+  async create(
+    projectId: string,
+    workspaceId?: string,
+    options: { aiAnalysisRequested?: boolean } = {},
+  ) {
     const project = await this.projects.findById(projectId, workspaceId);
     if (!project) throw new NotFoundException('项目不存在');
 
@@ -109,6 +122,7 @@ export class AnalysesService implements OnApplicationBootstrap {
       symbolChanges: [],
       symbolImpacts: [],
       aiAnalysis: null,
+      aiAnalysisRequested: options.aiAnalysisRequested ?? false,
       finishedAt: hasChanges ? null : new Date().toISOString(),
     });
 
@@ -145,6 +159,7 @@ export class AnalysesService implements OnApplicationBootstrap {
       symbolChanges: [],
       symbolImpacts: [],
       aiAnalysis: null,
+      aiAnalysisRequested: false,
       finishedAt: null,
     });
 
@@ -245,6 +260,9 @@ export class AnalysesService implements OnApplicationBootstrap {
         project.id,
         task.targetCommit,
       );
+      if (task.aiAnalysisRequested) {
+        await this.analyzeWithAi(task.id);
+      }
       this.logger.log(`分析任务 ${task.id} 执行完成`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

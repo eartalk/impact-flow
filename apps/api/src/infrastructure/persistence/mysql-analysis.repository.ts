@@ -35,6 +35,7 @@ type AnalysisRow = RowDataPacket & {
   symbol_impacts: string | AnalysisTask['symbolImpacts'] | null;
   change_evidence: string | ChangeEvidence[] | null;
   ai_analysis: string | AnalysisTask['aiAnalysis'] | null;
+  ai_analysis_requested: number;
   commit_summary: string | CommitSummary[] | null;
   created_at: string;
   finished_at: string | null;
@@ -126,6 +127,18 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return rows.map((row) => this.map(row));
   }
 
+  async findRequestedAi(): Promise<AnalysisTask[]> {
+    const db = await this.database.connection();
+    const [rows] = await db.query<AnalysisRow[]>(
+      `${this.baseSelect()}
+       WHERE a.status = 'SUCCESS'
+         AND a.ai_analysis_requested = 1
+         AND a.ai_analysis IS NULL
+       ORDER BY a.created_at`,
+    );
+    return rows.map((row) => this.map(row));
+  }
+
   async findActiveByProject(projectId: string): Promise<AnalysisTask | null> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
@@ -137,16 +150,44 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return rows[0] ? this.map(rows[0]) : null;
   }
 
-  async listLogs(query: AnalysisLogQuery): Promise<AnalysisLogPage> {
+  async listLogs(
+    query: AnalysisLogQuery,
+    workspaceId?: string,
+  ): Promise<AnalysisLogPage> {
     const db = await this.database.connection();
     const page = Math.max(1, query.page ?? 1);
     const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 10));
     const offset = (page - 1) * pageSize;
     const changeAnalysis = query.type === 'CHANGE_ANALYSIS';
-    const countSql = changeAnalysis
-      ? 'SELECT COUNT(*) AS total FROM analysis_task WHERE project_id = ?'
-      : 'SELECT COUNT(*) AS total FROM ai_analysis_log WHERE project_id = ?';
-    const [counts] = await db.query<CountRow[]>(countSql, [query.projectId]);
+
+    // projectId 可省略，因此必须显式按工作空间隔离，避免跨租户读到日志
+    const conditions: string[] = [];
+    const filterValues: Array<string | number> = [];
+    if (workspaceId) {
+      conditions.push('p.workspace_id = ?');
+      filterValues.push(workspaceId);
+    }
+    if (query.projectId) {
+      conditions.push(changeAnalysis ? 'a.project_id = ?' : 'l.project_id = ?');
+      filterValues.push(query.projectId);
+    }
+    if (query.status) {
+      conditions.push(changeAnalysis ? 'a.status = ?' : 'l.status = ?');
+      filterValues.push(query.status);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const from = changeAnalysis
+      ? `FROM analysis_task a
+         JOIN project p ON p.id = a.project_id`
+      : `FROM ai_analysis_log l
+         JOIN analysis_task a ON a.id = l.analysis_task_id
+         JOIN project p ON p.id = l.project_id`;
+
+    const [counts] = await db.query<CountRow[]>(
+      `SELECT COUNT(*) AS total ${from} ${where}`,
+      filterValues,
+    );
     const total = Number(counts[0]?.total ?? 0);
 
     const sql = changeAnalysis
@@ -155,22 +196,17 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
                 NULL AS model, a.error_message, NULL AS token_usage,
                 a.created_at AS started_at, a.finished_at,
                 TIMESTAMPDIFF(MICROSECOND, a.created_at, a.finished_at) / 1000 AS duration_ms
-         FROM analysis_task a
-         JOIN project p ON p.id = a.project_id
-         WHERE a.project_id = ?
+         ${from} ${where}
          ORDER BY a.created_at DESC LIMIT ? OFFSET ?`
       : `SELECT l.id, l.analysis_task_id AS analysis_id, l.project_id,
                 p.name AS project_name, 'AI_ANALYSIS' AS type, l.status,
                 a.base_commit, a.target_commit, l.model, l.error_message,
                 l.token_usage, l.started_at, l.finished_at,
                 TIMESTAMPDIFF(MICROSECOND, l.started_at, l.finished_at) / 1000 AS duration_ms
-         FROM ai_analysis_log l
-         JOIN analysis_task a ON a.id = l.analysis_task_id
-         JOIN project p ON p.id = l.project_id
-         WHERE l.project_id = ?
+         ${from} ${where}
          ORDER BY l.started_at DESC LIMIT ? OFFSET ?`;
     const [rows] = await db.query<AnalysisLogRow[]>(sql, [
-      query.projectId,
+      ...filterValues,
       pageSize,
       offset,
     ]);
@@ -202,8 +238,8 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
         `INSERT INTO analysis_task
          (id, project_id, release_id, base_commit, target_commit, status,
           commit_count, changed_file_count, additions, deletions, error_message,
-          finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ai_analysis_requested, finished_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           analysisId,
           input.projectId,
@@ -216,6 +252,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
           input.additions,
           input.deletions,
           input.errorMessage,
+          input.aiAnalysisRequested ? 1 : 0,
           input.finishedAt ? new Date(input.finishedAt) : null,
         ],
       );
@@ -434,6 +471,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       symbolImpacts,
       changeEvidence,
       aiAnalysis,
+      aiAnalysisRequested: Boolean(row.ai_analysis_requested),
       commits,
       createdAt: new Date(row.created_at).toISOString(),
       finishedAt: row.finished_at

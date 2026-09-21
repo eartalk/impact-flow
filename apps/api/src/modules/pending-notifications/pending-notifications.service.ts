@@ -1,16 +1,20 @@
 import {
+  BadGatewayException,
   BadRequestException,
   Inject,
   Injectable,
 } from '@nestjs/common';
 import type {
   CommitSummary,
+  NotificationDeliveryLogPage,
+  NotificationDeliveryLogQuery,
   PendingNotificationConfig,
   Project,
   UpdatePendingNotificationConfigInput,
 } from '@impact-flow/contracts';
 import {
   NOTIFICATION_GATEWAY,
+  isNotificationDeliveryError,
   type NotificationGateway,
 } from '../../core/ports/notification.gateway';
 import {
@@ -19,6 +23,8 @@ import {
   type StoredPendingNotificationConfig,
 } from '../../core/ports/pending-notification.repository';
 import { SecretCipher } from '../../infrastructure/security/secret-cipher';
+
+const CHANNEL = 'DINGTALK';
 
 @Injectable()
 export class PendingNotificationsService {
@@ -32,6 +38,10 @@ export class PendingNotificationsService {
 
   async getConfig(workspaceId: string) {
     return this.publicConfig(await this.repository.findConfig(workspaceId));
+  }
+
+  async listDeliveries(workspaceId: string, query: NotificationDeliveryLogQuery) {
+    return this.repository.listDeliveries(workspaceId, query);
   }
 
   async updateConfig(workspaceId: string, input: UpdatePendingNotificationConfigInput) {
@@ -54,7 +64,12 @@ export class PendingNotificationsService {
     if (!config.webhookEncrypted) {
       throw new BadRequestException('请先保存钉钉 Webhook');
     }
-    await this.gateway.test(this.cipher.decrypt(config.webhookEncrypted));
+    try {
+      await this.gateway.test(this.cipher.decrypt(config.webhookEncrypted));
+    } catch (error) {
+      // 测试接口面向 HTTP 调用，保持 502 语义，同时不丢失失败原因
+      throw new BadGatewayException(this.describe(error).message);
+    }
     return {
       success: true,
       message: '钉钉测试通知发送成功',
@@ -79,17 +94,46 @@ export class PendingNotificationsService {
     ) {
       return false;
     }
-    await this.gateway.sendPendingChange({
-      webhook: this.cipher.decrypt(config.webhookEncrypted),
-      projectName: input.project.name,
-      projectCode: input.project.code,
-      branch: input.project.productionBranch,
-      baseCommit: input.baseCommit,
+
+    const base = {
+      workspaceId: input.project.workspaceId,
+      projectId: input.project.id,
       targetCommit: input.targetCommit,
-      commits: input.commits,
-    });
-    await this.repository.markDelivered(input.project.id, input.targetCommit);
+      channel: CHANNEL,
+    } as const;
+
+    try {
+      await this.gateway.sendPendingChange({
+        webhook: this.cipher.decrypt(config.webhookEncrypted),
+        projectName: input.project.name,
+        projectCode: input.project.code,
+        branch: input.project.productionBranch,
+        baseCommit: input.baseCommit,
+        targetCommit: input.targetCommit,
+        commits: input.commits,
+      });
+    } catch (error) {
+      const failure = this.describe(error);
+      // 失败也要留痕；不标记成功，下次巡检会继续重试（at-least-once）
+      await this.repository.recordDelivery({
+        ...base,
+        status: 'FAILED',
+        errorCode: failure.code,
+        errorMessage: failure.message,
+      });
+      throw error;
+    }
+
+    await this.repository.recordDelivery({ ...base, status: 'SUCCESS' });
     return true;
+  }
+
+  private describe(error: unknown): { code: string; message: string } {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isNotificationDeliveryError(error)) {
+      return { code: error.code, message };
+    }
+    return { code: 'UNKNOWN', message };
   }
 
   private publicConfig(

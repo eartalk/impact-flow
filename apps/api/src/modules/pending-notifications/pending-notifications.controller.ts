@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query } from '@nestjs/common';
 import { PendingNotificationsService } from './pending-notifications.service';
 import { UpdatePendingNotificationDto } from './dto/update-pending-notification.dto';
+import { ListNotificationDeliveryLogsDto } from './dto/list-notification-delivery-logs.dto';
 import { CurrentSession, Roles } from '../auth/auth.decorators';
 import type { AuthSession } from '@impact-flow/contracts';
 
@@ -11,6 +12,14 @@ export class PendingNotificationsController {
   @Get()
   getConfig(@CurrentSession() session: AuthSession) {
     return this.notifications.getConfig(session.workspace.id);
+  }
+
+  @Get('logs')
+  listLogs(
+    @CurrentSession() session: AuthSession,
+    @Query() query: ListNotificationDeliveryLogsDto,
+  ) {
+    return this.notifications.listDeliveries(session.workspace.id, query);
   }
 
   @Patch()

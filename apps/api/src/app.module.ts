@@ -6,6 +6,7 @@ import { AnalysesModule } from './modules/analyses/analyses.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { AiConfigsModule } from './modules/ai-configs/ai-configs.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AutomationsModule } from './modules/automations/automations.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { AuthModule } from './modules/auth/auth.module';
     AiConfigsModule,
     ProjectsModule,
     AnalysesModule,
+    AutomationsModule,
   ],
   controllers: [HealthController],
 })

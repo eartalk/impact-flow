@@ -14,5 +14,6 @@ import { AiConfigsModule } from '../ai-configs/ai-configs.module';
     TypeScriptSymbolAnalyzer,
     { provide: SYMBOL_ANALYZER_GATEWAY, useExisting: TypeScriptSymbolAnalyzer },
   ],
+  exports: [AnalysesService],
 })
 export class AnalysesModule {}
