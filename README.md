@@ -77,18 +77,92 @@ DATABASE_PASSWORD_BASE64=base64-encoded-admin-password
 DATABASE_PASSWORD_FILE=/run/secrets/mysql-root-password
 ```
 
-数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/016_add_workspace_automation_policy.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段。
+数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/018_add_analysis_cancelled_status.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段；迁移 017 会回填工作空间所有者与用户默认空间，并在工作空间成员表上建立单所有者约束，执行前同样建议先备份；迁移 018 只是把分析任务状态列的注释补上 `CANCELLED`（列类型本就是 varchar，无需改表）。迁移 019 是已经停用的邀请功能历史脚本，仅为兼容已执行过该迁移的环境而保留，新环境无需执行。
 
 增量脚本需要按序号手工执行，且**必须显式指定连接字符集**，否则中文表名注释与列注释会被写成乱码（Windows 下 mysql 客户端默认不是 utf8mb4）：
 
 ```bash
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/015_merge_pending_notification_delivery.sql
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/016_add_workspace_automation_policy.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/017_add_workspace_management.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/018_add_analysis_cancelled_status.sql
 ```
 
-脚本执行后可用 `SHOW FULL COLUMNS FROM <table>` 或查询 `information_schema.COLUMNS` 的 `COLUMN_COMMENT` 复核注释是否正常。
+迁移 017 执行前会校验每个工作空间恰好有一个 OWNER，若存在「无 OWNER」或「多 OWNER」的异常数据会直接中止并提示人工修复，不会写入半成品结构。
 
-首次打开页面会进入系统初始化，创建首位工作空间所有者。系统不提供公开注册，后续账号由所有者或管理员在成员管理中创建。登录会话保存在 HttpOnly Cookie 中，项目、AI 配置和通知配置均按工作空间隔离。
+脚本执行后可用以下命令校验工作空间字段、任务状态注释以及 OWNER 数据一致性（命令不会输出数据库密码）：
+
+```bash
+pnpm --filter @impact-flow/api verify:workspace-schema
+```
+
+也可以用 `SHOW FULL COLUMNS FROM <table>` 或查询 `information_schema.COLUMNS` 的 `COLUMN_COMMENT` 手工复核注释是否正常。
+
+首次打开页面会进入系统初始化，创建首位工作空间所有者。初始化完成后，登录页支持注册新账号；注册时必须同时创建首个工作空间，账号与工作空间在同一事务内写入，注册人自动成为 OWNER 并直接登录。所有者或管理员也可以在成员管理中创建当前工作空间成员。登录会话保存在 HttpOnly Cookie 中，项目、AI 配置和通知配置均按工作空间隔离。
+
+## 工作空间作用域约定
+
+多工作空间的数据安全边界依赖一条硬约束：**当前 `workspaceId` 只能来自服务端会话（`auth_session.workspace_id`），永远不信任前端提交的空间 ID**。为此仓储端口按命名区分两类查询：
+
+```text
+业务查询（必须显式传 workspaceId，参数不可省略）
+  findAll(workspaceId) / findById(id, workspaceId) / findByCode(code, workspaceId)
+  findActiveByProject(projectId, workspaceId) / listLogs(query, workspaceId)
+  findInspectionLogs(query, workspaceId)
+
+系统级查询（无作用域，仅限调度器与后台任务执行器）
+  findAllForScheduler()
+  findByIdForWorkerTask(id)
+  findPendingForWorker() / findPendingAiForWorker() / findRequestedAiForWorker()
+```
+
+`workspaceId` 设计为必填参数而非可选，目的是让「漏传作用域」在编译期就报错，而不是变成一次静默的跨租户读取。新增业务查询一律不加 `For*` 后缀；确需跨工作空间时，必须新增显式的 `For*` 方法并写明理由。
+
+后台任务执行器（应用启动恢复、`process` / `processAi`）没有用户会话，任务记录即作用域的权威来源：先用 `findByIdForWorkerTask` 载入任务与项目，再以返回的 `project.workspaceId` 约束后续所有查询。跨仓库 Symbol 调用链的关联仓库只能取自同一工作空间。
+
+## 多工作空间
+
+一个账号可以同时属于多个工作空间。登录时按以下优先级确定进入哪一个：上次使用的工作空间 → 本人担任 OWNER 的空间 → 加入时间最早的空间。若账号不属于任何有效空间，登录会被拒绝。
+
+工作空间创建权限是**用户级策略**，不复用工作空间内的角色，由环境变量控制：
+
+```env
+WORKSPACE_CREATION_MODE=ANY_USER
+```
+
+- `ANY_USER`：任意活跃账号均可创建（默认）
+- `ADMIN_ONLY`：仅「至少是一个 ACTIVE 工作空间的 OWNER」的账号可创建
+- `DISABLED`：关闭页面自助创建，只能由部署方初始化
+
+每个工作空间必须且只能有一个 OWNER。该约束由数据库层保证：`workspace_member.owner_workspace_id` 是只在 `role = 'OWNER'` 时才等于 `workspace_id` 的生成列，配合唯一键借助「NULL 不参与唯一性比较」实现。`workspace.owner_user_id` 是同一事实的冗余权威字段。应用不提供所有权转让功能，OWNER 不能被降级、移除或停用。
+
+### 切换工作空间不轮换会话
+
+`POST /api/workspaces/:id/switch` 只就地把 `auth_session.workspace_id` 更新为目标空间，**不撤销也不重新签发会话**，因此响应中不需要重设 Cookie。
+
+这样选择的代价与约束：
+
+- 浏览器的 Cookie 由同源下所有标签页共享，所以在一个标签页切换后，**其他标签页会在下一次请求时静默跟随**到新工作空间。前端必须用 workspace generation 标记丢弃旧空间的在途响应，否则旧数据可能覆盖新空间状态。
+- 切换不构成权限边界变化（用户本来就同时属于两个空间），因此不做 token 轮换；会话固定攻击的防护仍然只落在登录环节。
+- 目标空间必须为 `ACTIVE` 且当前用户是其成员，否则返回 404（非成员与不存在统一处理，避免暴露空间是否存在）。
+
+### 成员治理
+
+- **新增成员统一使用 `POST /api/members`**：由所有者或管理员创建新账号，并直接加入当前工作空间。系统不提供已有账号直接加入或邀请链接流程。
+- **移除成员会同时撤销该成员在此工作空间下的全部有效会话**（`MEMBER_REMOVED` 审计记录里带 `revokedSessions` 数量）。若不撤销，对方手上的登录态仍能继续读取该空间数据。
+- 所有者不能被降级、移除或停用；应用内不提供所有权变更入口。
+- 审计摘记只写资源 ID、角色与用户名，**不写密码**（有测试专门断言审计内容不含密码明文）。
+
+### 归档与恢复
+
+`POST /api/workspaces/current/archive` 把工作空间置为 `ARCHIVED`，并在**同一事务**内把该空间下尚未运行的 `READY` 分析任务置为 `CANCELLED`；`POST /api/workspaces/:id/restore` 恢复，不补跑历史巡检、自动化配置原样保留。两者都仅 `OWNER` 可执行。
+
+归档后的约束：
+
+- **统一只读**：由全局守卫 `ArchivedWorkspaceGuard` 拦截所有非 GET 请求，例外只有「撤销归档」「切换空间」「退出登录」「新建工作空间」四条。写死白名单而不是逐接口判断，是为了避免某个接口漏加而继续向归档空间写入。
+- **会话不失效**：`findSession` 允许会话指向归档空间，所以归档后所有者仍能进入只读管理页并恢复，**归档不再是只能改库才能撤销的单向门**。
+- **登录兜底**：`resolveLoginWorkspace` 优先 ACTIVE 空间，但账号没有任何 ACTIVE 空间时会回退到其归档空间，避免「唯一空间被归档后无法登录」的死锁。
+- **自动链路冻结**：已 `RUNNING` 的分析允许跑完，但归档后不再触发自动 AI 分析；定时调度器只遍历 ACTIVE 空间的项目，因此归档空间不会被继续巡检。
 
 私有 Codeup 仓库需要保证运行 API 的系统账号拥有对应 SSH Key，且首次连接所需的主机指纹已经加入 `known_hosts`。
 
@@ -101,9 +175,23 @@ POST /api/auth/bootstrap
 POST /api/auth/login
 POST /api/auth/logout
 GET  /api/auth/me
+POST /api/auth/register
 GET  /api/members
 POST /api/members
 PATCH /api/members/:userId/role
+DELETE /api/members/:userId
+POST /api/members/:userId/disable
+POST /api/members/:userId/restore
+POST /api/members/:userId/reset-password
+GET  /api/audit-logs
+GET  /api/workspaces
+POST /api/workspaces
+GET  /api/workspaces/creation-policy
+GET  /api/workspaces/current
+PATCH /api/workspaces/current
+POST /api/workspaces/current/archive
+POST /api/workspaces/:id/restore
+POST /api/workspaces/:id/switch
 GET  /api/projects
 POST /api/projects
 PATCH /api/projects/:id
