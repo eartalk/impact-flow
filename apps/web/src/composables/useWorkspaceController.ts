@@ -16,16 +16,17 @@ import type {
   PendingNotificationConfig,
   Project,
   RepositoryConnectionTest,
-  AuthSession,
-  CreateWorkspaceInput,
   CreateWorkspaceMemberInput,
-  RegisterInput,
-  WorkspaceCreationPolicy,
   WorkspaceMember,
   WorkspaceOverview,
   WorkspaceRole,
 } from "@impact-flow/contracts";
 import { api, bumpWorkspaceGeneration, WorkspaceSwitchedError } from "../api";
+import { useAuthSession } from "./useAuthSession";
+import {
+  useWorkspaceManagementState,
+  type WorkspaceSettingsTab,
+} from "./useWorkspaceManagementState";
 
 /**
  * 统一错误提示。
@@ -45,8 +46,6 @@ type LogsTab = "CHANGE_ANALYSIS" | "AI_ANALYSIS" | "NOTIFICATION";
 
 const LOGS_PAGE_SIZE = 10;
 
-type WorkspaceSettingsTab = "profile" | "audit" | "danger";
-
 type ActiveView =
   | "analysis"
   | "services"
@@ -55,10 +54,7 @@ type ActiveView =
   | "members"
   | "workspace-settings";
 
-type AuthMode = "login" | "register-account" | "register-workspace";
-
 const activeView = ref<ActiveView>("analysis");
-const workspaceSettingsTab = ref<WorkspaceSettingsTab>("profile");
 const editingProjectId = ref<string | null>(null);
 const savingProject = ref(false);
 const detectingProjectId = ref<string | null>(null);
@@ -105,11 +101,6 @@ const testingPendingNotification = ref(false);
 const automationConfig = ref<AutomationConfig | null>(null);
 const automationConfigLoading = ref(false);
 const savingAutomationConfig = ref(false);
-const authLoading = ref(true);
-const authSubmitting = ref(false);
-const bootstrapRequired = ref(false);
-const authMode = ref<AuthMode>("login");
-const currentSession = ref<AuthSession | null>(null);
 const membersLoading = ref(false);
 const members = ref<WorkspaceMember[]>([]);
 const memberCreating = ref(false);
@@ -127,20 +118,6 @@ const auditFilters = reactive<{ action: string; operatorId: string }>({
 const auditPage = ref(1);
 const auditTotal = ref(0);
 const auditTotalPages = ref(1);
-const workspaces = ref<WorkspaceOverview[]>([]);
-const workspacesLoading = ref(false);
-const workspaceCreationPolicy = ref<WorkspaceCreationPolicy>({
-  mode: "ANY_USER",
-  allowed: true,
-});
-const switchingWorkspaceId = ref<string | null>(null);
-const workspaceDialogVisible = ref(false);
-const savingWorkspace = ref(false);
-
-const savingWorkspaceSettings = ref(false);
-const archivingWorkspace = ref(false);
-const restoringWorkspace = ref(false);
-const archiveConfirmName = ref("");
 let projectRefreshTimer: ReturnType<typeof setInterval> | undefined;
 let analysisPollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -175,24 +152,6 @@ const automationForm = reactive({
   autoAiAnalysisEnabled: false,
 });
 
-const loginForm = reactive({ username: "", password: "" });
-const registerAccountForm = reactive({
-  displayName: "",
-  username: "",
-  password: "",
-  confirmPassword: "",
-});
-const registerWorkspaceForm = reactive({
-  name: "",
-  code: "",
-  description: "",
-});
-const bootstrapForm = reactive({
-  username: "admin",
-  password: "",
-  displayName: "系统管理员",
-  workspaceName: "Impact Flow 团队",
-});
 const memberForm = reactive<CreateWorkspaceMemberInput>({
   username: "",
   password: "",
@@ -200,13 +159,55 @@ const memberForm = reactive<CreateWorkspaceMemberInput>({
   role: "MEMBER",
 });
 
-const workspaceForm = reactive<CreateWorkspaceInput>({
-  name: "",
-  code: "",
-  description: "",
+const {
+  authLoading,
+  authSubmitting,
+  bootstrapRequired,
+  authMode,
+  currentSession,
+  loginForm,
+  registerAccountForm,
+  registerWorkspaceForm,
+  bootstrapForm,
+  initializeAuth,
+  submitAuth,
+  openRegistration,
+  showLogin,
+  continueRegistration,
+  backToRegisterAccount,
+  submitRegistration,
+  logout,
+} = useAuthSession({
+  loadData: () => loadData(),
+  loadWorkspaces: () => loadWorkspaces(),
+  loadWorkspaceCreationPolicy: () => loadWorkspaceCreationPolicy(),
+  startBackgroundTasks,
+  stopBackgroundTasks,
+  resetWorkspaceScopedState,
+  clearWorkspaces: () => {
+    workspaces.value = [];
+  },
+  notifyError,
 });
 
-const workspaceSettingsForm = reactive({ name: "", description: "" });
+const {
+  workspaces,
+  workspacesLoading,
+  workspaceCreationPolicy,
+  switchingWorkspaceId,
+  workspaceDialogVisible,
+  savingWorkspace,
+  workspaceSettingsTab,
+  savingWorkspaceSettings,
+  archivingWorkspace,
+  restoringWorkspace,
+  archiveConfirmName,
+  workspaceForm,
+  workspaceSettingsForm,
+  isCurrentWorkspaceArchived,
+  currentWorkspace,
+  canManageWorkspace,
+} = useWorkspaceManagementState(currentSession);
 
 const canManageMembers = computed(() =>
   ["OWNER", "ADMIN"].includes(currentSession.value?.workspace.role ?? ""),
@@ -237,149 +238,6 @@ function stopBackgroundTasks() {
   if (analysisPollTimer) clearInterval(analysisPollTimer);
   projectRefreshTimer = undefined;
   analysisPollTimer = undefined;
-}
-
-async function initializeAuth() {
-  authLoading.value = true;
-  try {
-    const status = await api.getBootstrapStatus();
-    bootstrapRequired.value = status.required;
-    if (!status.required) {
-      try {
-        currentSession.value = await api.getCurrentSession();
-        await Promise.all([loadData(), loadWorkspaces()]);
-        void loadWorkspaceCreationPolicy();
-        startBackgroundTasks();
-      } catch {
-        currentSession.value = null;
-      }
-    }
-  } catch (error) {
-    notifyError(error, "认证服务不可用");
-  } finally {
-    authLoading.value = false;
-  }
-}
-
-async function submitAuth() {
-  authSubmitting.value = true;
-  try {
-    currentSession.value = bootstrapRequired.value
-      ? await api.bootstrap(bootstrapForm)
-      : await api.login(loginForm);
-    bootstrapRequired.value = false;
-    loginForm.password = "";
-    bootstrapForm.password = "";
-    await Promise.all([loadData(), loadWorkspaces()]);
-    void loadWorkspaceCreationPolicy();
-    startBackgroundTasks();
-  } catch (error) {
-    notifyError(error, "登录失败");
-  } finally {
-    authSubmitting.value = false;
-  }
-}
-
-function openRegistration() {
-  authMode.value = "register-account";
-  loginForm.password = "";
-}
-
-function showLogin() {
-  authMode.value = "login";
-}
-
-async function continueRegistration() {
-  const username = registerAccountForm.username.trim();
-  if (!registerAccountForm.displayName.trim()) {
-    ElMessage.warning("请输入显示名称");
-    return;
-  }
-  if (!/^[a-zA-Z0-9_.@-]{3,100}$/.test(username)) {
-    ElMessage.warning("账号需为 3-100 位字母、数字或 . _ @ -");
-    return;
-  }
-  if (registerAccountForm.password.length < 8) {
-    ElMessage.warning("密码至少需要 8 个字符");
-    return;
-  }
-  if (registerAccountForm.password !== registerAccountForm.confirmPassword) {
-    ElMessage.warning("两次输入的密码不一致");
-    return;
-  }
-
-  try {
-    await ElMessageBox.confirm(
-      "账号信息已填写完成，是否继续新建工作空间？",
-      "继续完成注册",
-      {
-        confirmButtonText: "继续新建工作空间",
-        cancelButtonText: "暂不创建",
-        type: "info",
-      },
-    );
-    if (!registerWorkspaceForm.code) {
-      const code = username
-        .toLowerCase()
-        .replace(/[^a-z0-9-]+/g, "-")
-        .replace(/^-+|-+$/g, "");
-      registerWorkspaceForm.code = `${code || "team"}-workspace`.slice(0, 100);
-    }
-    authMode.value = "register-workspace";
-  } catch {
-    ElMessage.info("账号信息已保留，创建工作空间后即可完成注册");
-  }
-}
-
-function backToRegisterAccount() {
-  authMode.value = "register-account";
-}
-
-async function submitRegistration() {
-  if (!registerWorkspaceForm.name.trim()) {
-    ElMessage.warning("请输入工作空间名称");
-    return;
-  }
-  if (!/^[a-z0-9][a-z0-9-]{1,99}$/.test(registerWorkspaceForm.code.trim())) {
-    ElMessage.warning("工作空间编码需为 2-100 位小写字母、数字或连字符");
-    return;
-  }
-
-  authSubmitting.value = true;
-  const input: RegisterInput = {
-    username: registerAccountForm.username,
-    password: registerAccountForm.password,
-    displayName: registerAccountForm.displayName,
-    workspaceName: registerWorkspaceForm.name,
-    workspaceCode: registerWorkspaceForm.code,
-    workspaceDescription: registerWorkspaceForm.description || undefined,
-  };
-  try {
-    currentSession.value = await api.register(input);
-    registerAccountForm.password = "";
-    registerAccountForm.confirmPassword = "";
-    authMode.value = "login";
-    await Promise.all([loadData(), loadWorkspaces()]);
-    void loadWorkspaceCreationPolicy();
-    startBackgroundTasks();
-    ElMessage.success("账号和工作空间已创建");
-  } catch (error) {
-    notifyError(error, "注册失败");
-  } finally {
-    authSubmitting.value = false;
-  }
-}
-
-async function logout() {
-  try {
-    await api.logout();
-  } finally {
-    stopBackgroundTasks();
-    currentSession.value = null;
-    resetWorkspaceScopedState();
-    workspaces.value = [];
-    authMode.value = "login";
-  }
 }
 
 async function loadWorkspaces() {
@@ -564,11 +422,6 @@ async function refreshCurrentSession() {
   }
 }
 
-/** 当前会话所在工作空间是否已归档（只读管理态） */
-const isCurrentWorkspaceArchived = computed(
-  () => currentSession.value?.workspace.status === "ARCHIVED",
-);
-
 async function archiveWorkspace() {
   const name = currentSession.value?.workspace.name ?? "";
   if (archiveConfirmName.value.trim() !== name) {
@@ -600,18 +453,6 @@ async function restoreWorkspace() {
     restoringWorkspace.value = false;
   }
 }
-
-const currentWorkspace = computed(
-  () =>
-    workspaces.value.find(
-      (item) => item.id === currentSession.value?.workspace.id,
-    ) ?? null,
-);
-
-const canManageWorkspace = computed(() => {
-  const role = currentSession.value?.workspace.role;
-  return role === "OWNER" || role === "ADMIN";
-});
 
 async function openMembers() {
   if (!canManageMembers.value) return;
