@@ -6,11 +6,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type {
   CreateWorkspaceInput,
   UpdateWorkspaceInput,
-  WorkspaceCreationMode,
   WorkspaceCreationPolicy,
   WorkspaceOverview,
 } from '@impact-flow/contracts';
@@ -36,7 +34,6 @@ export class WorkspacesService {
     private readonly identities: IdentityRepository,
     @Inject(AUDIT_REPOSITORY)
     private readonly audit: AuditRepository,
-    private readonly config: ConfigService,
   ) {}
 
   list(userId: string): Promise<WorkspaceOverview[]> {
@@ -49,19 +46,8 @@ export class WorkspacesService {
     return workspace;
   }
 
-  /**
-   * 工作空间创建权限是用户级策略，不复用工作空间内的角色。
-   * ADMIN_ONLY 以「至少是一个 ACTIVE 工作空间的 OWNER」作为系统管理员的判定依据，
-   * 这样无需新增系统级角色即可限制自助创建。
-   */
-  async creationPolicy(userId: string): Promise<WorkspaceCreationPolicy> {
-    const mode = this.creationMode();
-    if (mode === 'DISABLED') return { mode, allowed: false };
-    if (mode === 'ANY_USER') return { mode, allowed: true };
-    const owned = (await this.workspaces.listForUser(userId)).some(
-      (workspace) => workspace.status === 'ACTIVE' && workspace.role === 'OWNER',
-    );
-    return { mode, allowed: owned };
+  async creationPolicy(_userId: string): Promise<WorkspaceCreationPolicy> {
+    return { mode: 'ANY_USER', allowed: true };
   }
 
   async create(
@@ -166,16 +152,5 @@ export class WorkspacesService {
       ipAddress,
     });
     return { restored: true };
-  }
-
-  private creationMode(): WorkspaceCreationMode {
-    const raw = (this.config.get('WORKSPACE_CREATION_MODE') ?? 'ANY_USER')
-      .toString()
-      .trim()
-      .toUpperCase();
-    if (raw === 'DISABLED' || raw === 'ADMIN_ONLY' || raw === 'ANY_USER') {
-      return raw;
-    }
-    return 'ANY_USER';
   }
 }

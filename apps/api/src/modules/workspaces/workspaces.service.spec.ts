@@ -1,4 +1,3 @@
-import { ConfigService } from '@nestjs/config';
 import type { WorkspaceOverview } from '@impact-flow/contracts';
 import { WorkspacesService } from './workspaces.service';
 
@@ -22,7 +21,7 @@ function workspaceOverview(
 }
 
 describe('WorkspacesService', () => {
-  function setup(mode?: string) {
+  function setup() {
     const workspaces = {
       listForUser: jest.fn().mockResolvedValue([]),
       findForUser: jest.fn(),
@@ -36,9 +35,6 @@ describe('WorkspacesService', () => {
     };
     const identities = {};
     const audit = { write: jest.fn().mockResolvedValue(undefined) };
-    const config = new ConfigService(
-      mode ? { WORKSPACE_CREATION_MODE: mode } : {},
-    );
     return {
       workspaces,
       identities,
@@ -47,7 +43,6 @@ describe('WorkspacesService', () => {
         workspaces as never,
         identities as never,
         audit as never,
-        config,
       ),
     };
   }
@@ -89,41 +84,8 @@ describe('WorkspacesService', () => {
     expect(workspaces.createWithOwner).not.toHaveBeenCalled();
   });
 
-  it('blocks self-service creation when the mode is DISABLED', async () => {
-    const { workspaces, audit, service } = setup('DISABLED');
-
-    await expect(
-      service.create('user-1', { name: '测试团队', code: 'qa-team' }),
-    ).rejects.toThrow('当前系统不允许自助创建工作空间');
-    expect(workspaces.findByCode).not.toHaveBeenCalled();
-  });
-
-  it('requires being an owner of some workspace when the mode is ADMIN_ONLY', async () => {
-    const { workspaces, audit, service } = setup('ADMIN_ONLY');
-    workspaces.listForUser.mockResolvedValue([
-      workspaceOverview({ role: 'MEMBER' }),
-    ]);
-
-    await expect(
-      service.create('user-1', { name: '测试团队', code: 'qa-team' }),
-    ).rejects.toThrow('当前系统不允许自助创建工作空间');
-    expect(workspaces.createWithOwner).not.toHaveBeenCalled();
-  });
-
-  it('allows owners to create when the mode is ADMIN_ONLY', async () => {
-    const { workspaces, audit, service } = setup('ADMIN_ONLY');
-    workspaces.listForUser.mockResolvedValue([
-      workspaceOverview({ role: 'OWNER' }),
-    ]);
-    workspaces.createWithOwner.mockResolvedValue(workspaceOverview());
-
-    await expect(
-      service.create('user-1', { name: '测试团队', code: 'qa-team' }),
-    ).resolves.toEqual(expect.objectContaining({ id: 'workspace-1' }));
-  });
-
-  it('falls back to ANY_USER for an unknown creation mode', async () => {
-    const { service } = setup('SOMETHING_ELSE');
+  it('allows signed-in users to create workspaces', async () => {
+    const { service } = setup();
     await expect(service.creationPolicy('user-1')).resolves.toEqual({
       mode: 'ANY_USER',
       allowed: true,
@@ -172,7 +134,6 @@ describe('WorkspacesService 归档与恢复', () => {
         workspaces as never,
         {} as never,
         audit as never,
-        new ConfigService({}),
       ),
     };
   }

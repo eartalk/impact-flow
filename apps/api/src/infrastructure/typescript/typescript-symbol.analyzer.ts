@@ -102,7 +102,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
       ...targetPaths.filter((path) => changedTargetPaths.has(path)),
       ...targetPaths.filter((path) => !changedTargetPaths.has(path)),
     ];
-    const maxFiles = Number(this.config.get('SYMBOL_ANALYSIS_MAX_FILES') ?? 1500);
+    const maxFiles = 1500;
     const targetSources = await this.readSources(
       git,
       input.targetCommit,
@@ -114,12 +114,8 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     await this.registerProjectAlias(git, input.targetCommit, input.projectId, projectAliases);
 
     let relatedProjectCount = 0;
-    const maxRelatedProjects = Number(
-      this.config.get('SYMBOL_ANALYSIS_MAX_RELATED_PROJECTS') ?? 5,
-    );
-    const relatedMaxFiles = Number(
-      this.config.get('SYMBOL_ANALYSIS_RELATED_MAX_FILES') ?? 500,
-    );
+    const maxRelatedProjects = 5;
+    const relatedMaxFiles = 500;
     for (const related of (input.relatedRepositories ?? []).slice(0, maxRelatedProjects)) {
       const repositoryPath = this.repositoryPath(related.projectId);
       if (!(await this.exists(repositoryPath))) continue;

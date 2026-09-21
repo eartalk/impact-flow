@@ -244,17 +244,7 @@ POST /api/workspaces
 11. 提交事务。
 12. 自动把当前 Session 的 `workspace_id` 就地切换到新工作空间。
 
-工作空间创建权限不复用当前空间的 `OWNER / ADMIN / MEMBER / VIEWER` 角色。建议增加用户级系统策略：
-
-```env
-WORKSPACE_CREATION_MODE=ANY_USER
-```
-
-支持：
-
-- `ANY_USER`：任意活跃账号可以创建
-- `ADMIN_ONLY`：仅系统管理员可以创建
-- `DISABLED`：关闭页面创建，只允许部署管理员初始化
+工作空间创建权限不复用当前空间的 `OWNER / ADMIN / MEMBER / VIEWER` 角色。任意已登录账号均可创建新工作空间，创建后自动成为该空间的 `OWNER`。
 
 #### 切换工作空间
 

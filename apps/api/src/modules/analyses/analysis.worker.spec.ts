@@ -13,8 +13,7 @@ describe('AnalysisWorker', () => {
           ? jest.fn().mockResolvedValue(undefined)
           : jest.fn().mockRejectedValue(new Error('temporary git failure')),
     };
-    const config = { get: jest.fn((_key: string, fallback: unknown) => fallback) };
-    const worker = new AnalysisWorker(analyses as never, service as never, config as never);
+    const worker = new AnalysisWorker(analyses as never, service as never);
     return { analyses, service, worker };
   }
 

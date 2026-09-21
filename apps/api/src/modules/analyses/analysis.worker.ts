@@ -5,7 +5,6 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import {
@@ -28,15 +27,10 @@ export class AnalysisWorker
     @Inject(ANALYSIS_REPOSITORY)
     private readonly analyses: AnalysisRepository,
     private readonly service: AnalysesService,
-    private readonly config: ConfigService,
   ) {}
 
   async onApplicationBootstrap() {
     await this.service.recoverPendingAiTasks();
-    if (!this.enabled) {
-      this.logger.warn('分析 Worker 已关闭');
-      return;
-    }
     this.timer = setInterval(() => void this.drain(), this.pollIntervalMs);
     this.timer.unref?.();
     await this.drain();
@@ -106,20 +100,17 @@ export class AnalysisWorker
     });
   }
 
-  private get enabled() {
-    return this.config.get<string>('ANALYSIS_WORKER_ENABLED', 'true') !== 'false';
-  }
   private get concurrency() {
-    return Math.max(1, this.config.get<number>('ANALYSIS_WORKER_CONCURRENCY', 2));
+    return 2;
   }
   private get pollIntervalMs() {
-    return Math.max(250, this.config.get<number>('ANALYSIS_WORKER_POLL_INTERVAL_MS', 1000));
+    return 1000;
   }
   private get taskTimeoutMs() {
-    return Math.max(10_000, this.config.get<number>('ANALYSIS_TASK_TIMEOUT_MS', 600_000));
+    return 600_000;
   }
   private get retryBaseMs() {
-    return Math.max(1000, this.config.get<number>('ANALYSIS_RETRY_BASE_MS', 5000));
+    return 5000;
   }
   private get leaseGraceMs() {
     return 30_000;

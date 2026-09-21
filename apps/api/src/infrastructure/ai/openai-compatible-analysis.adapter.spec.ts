@@ -1,4 +1,3 @@
-import { ConfigService } from '@nestjs/config';
 import type { AiAnalysisInput } from '../../core/ports/ai-analyzer.gateway';
 import { OpenAiCompatibleAnalysisAdapter } from './openai-compatible-analysis.adapter';
 import type { AiConfigRepository } from '../../core/ports/ai-config.repository';
@@ -11,7 +10,7 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
 
   it('returns a disabled result without calling the model', async () => {
     const fetchSpy = jest.spyOn(global, 'fetch');
-    const adapter = createAdapter({ AI_ANALYSIS_ENABLED: 'false' });
+    const adapter = createAdapter(null);
 
     await expect(adapter.analyze(input())).resolves.toEqual(
       expect.objectContaining({ status: 'DISABLED', summary: null }),
@@ -47,12 +46,7 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
         usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 },
       }),
     } as unknown as Response);
-    const adapter = createAdapter({
-      AI_ANALYSIS_ENABLED: 'true',
-      AI_API_KEY: 'test-key',
-      AI_MODEL: 'test-model',
-      AI_API_BASE_URL: 'https://model.example/v1/',
-    });
+    const adapter = createAdapter({ baseUrl: 'https://model.example/v1/' });
 
     await expect(adapter.analyze(input())).resolves.toEqual(
       expect.objectContaining({
@@ -94,11 +88,7 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
       status: 200,
       json: async () => ({ choices: [{ message: { content: 'not-json' } }] }),
     } as unknown as Response);
-    const adapter = createAdapter({
-      AI_ANALYSIS_ENABLED: 'true',
-      AI_API_KEY: 'test-key',
-      AI_MODEL: 'test-model',
-    });
+    const adapter = createAdapter();
 
     await expect(adapter.analyze(input())).rejects.toThrow('不是有效 JSON');
   });
@@ -115,7 +105,7 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
         stop_reason: 'end_turn',
       }),
     } as unknown as Response);
-    const adapter = createAdapter({}, {
+    const adapter = createAdapter({
       baseUrl: 'https://model.example/anthropic',
       apiFormat: 'ANTHROPIC',
     });
@@ -134,7 +124,7 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
         stop_reason: 'max_tokens',
       }),
     } as unknown as Response);
-    const adapter = createAdapter({}, {
+    const adapter = createAdapter({
       baseUrl: 'https://model.example/anthropic',
       apiFormat: 'ANTHROPIC',
     });
@@ -151,7 +141,7 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
         stop_reason: 'max_tokens',
       }),
     } as unknown as Response);
-    const adapter = createAdapter({}, {
+    const adapter = createAdapter({
       baseUrl: 'https://model.example/anthropic',
       apiFormat: 'ANTHROPIC',
     });
@@ -168,7 +158,7 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
         usage: { input_tokens: 8, output_tokens: 2 },
       }),
     } as unknown as Response);
-    const adapter = createAdapter({});
+    const adapter = createAdapter(null);
 
     await expect(adapter.testConnection({
       baseUrl: 'https://model.example/anthropic',
@@ -190,11 +180,14 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
 });
 
 function createAdapter(
-  config: Record<string, string>,
-  savedOverrides?: { baseUrl?: string; apiFormat?: 'OPENAI' | 'ANTHROPIC' },
+  savedOverrides: {
+    baseUrl?: string;
+    apiFormat?: 'OPENAI' | 'ANTHROPIC';
+    enabled?: boolean;
+  } | null = {},
 ) {
   const repository = {
-    findDefault: jest.fn().mockResolvedValue(savedOverrides ? {
+    findDefault: jest.fn().mockResolvedValue(savedOverrides !== null ? {
       id: 'config-1',
       name: 'test',
       baseUrl: savedOverrides.baseUrl ?? 'https://model.example/v1',
@@ -202,7 +195,7 @@ function createAdapter(
       apiKeyHint: '***key',
       model: 'test-model',
       apiFormat: savedOverrides.apiFormat ?? 'OPENAI',
-      enabled: true,
+      enabled: savedOverrides.enabled ?? true,
       isDefault: true,
       timeoutMs: 30000,
       maxFiles: 80,
@@ -213,7 +206,6 @@ function createAdapter(
   } as unknown as AiConfigRepository;
   const cipher = { decrypt: jest.fn().mockReturnValue('test-key') } as unknown as SecretCipher;
   return new OpenAiCompatibleAnalysisAdapter(
-    new ConfigService(config),
     repository,
     cipher,
   );

@@ -4,7 +4,6 @@ import {
   OnApplicationBootstrap,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AnalysesService } from '../analyses/analyses.service';
 import { ProjectsService } from '../projects/projects.service';
 import { AutomationPoliciesService } from './automation-policies.service';
@@ -21,22 +20,10 @@ export class AutomationScheduler
     private readonly projects: ProjectsService,
     private readonly analyses: AnalysesService,
     private readonly policies: AutomationPoliciesService,
-    private readonly config: ConfigService,
   ) {}
 
   onApplicationBootstrap() {
-    const enabled = this.config.get('VERSION_CHECK_ENABLED', 'true') !== 'false';
-    if (!enabled) {
-      this.logger.log('生产版本定时巡检已关闭');
-      return;
-    }
-
-    const configuredInterval = Number(
-      this.config.get('VERSION_CHECK_INTERVAL_MS', 300_000),
-    );
-    const intervalMs = Number.isFinite(configuredInterval)
-      ? Math.max(configuredInterval, 30_000)
-      : 300_000;
+    const intervalMs = 300_000;
 
     this.initialRun = setTimeout(() => void this.inspect(), 10_000);
     this.initialRun.unref();
@@ -52,14 +39,8 @@ export class AutomationScheduler
 
   private async inspect() {
     try {
-      const configuredRetention = Number(
-        this.config.get('INSPECTION_LOG_RETENTION_DAYS', 30),
-      );
-      const retentionDays = Number.isFinite(configuredRetention)
-        ? configuredRetention
-        : 30;
-      await this.projects.cleanupInspectionLogs(retentionDays);
-      // 系统级：定时调度器需要跨工作空间遍历，再按每个项目所属空间套用各自的自动化策略
+      await this.projects.cleanupInspectionLogs(30);
+      // 调度器跨工作空间遍历，再按每个项目所属空间套用各自的自动化策略。
       const configuredProjects = await this.projects.listForScheduler();
       const configurations = new Map<
         string,

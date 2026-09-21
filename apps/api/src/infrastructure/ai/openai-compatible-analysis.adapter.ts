@@ -1,5 +1,4 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type {
   AiAnalysisResult,
   AiProviderConnectionTest,
@@ -46,7 +45,6 @@ type ModelAnalysis = {
 @Injectable()
 export class OpenAiCompatibleAnalysisAdapter implements AiAnalyzerGateway {
   constructor(
-    private readonly config: ConfigService,
     @Inject(AI_CONFIG_REPOSITORY)
     private readonly configurations: AiConfigRepository,
     private readonly cipher: SecretCipher,
@@ -358,41 +356,17 @@ export class OpenAiCompatibleAnalysisAdapter implements AiAnalyzerGateway {
       .slice(0, maxItems);
   }
 
-  private positiveNumber(key: string, fallback: number) {
-    const value = Number(this.config.get(key) ?? fallback);
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
-  }
-
   private async activeSettings(workspaceId: string) {
     const saved = await this.configurations.findDefault(workspaceId);
-    if (saved) {
-      if (!saved.enabled) return null;
-      return {
-        baseUrl: saved.baseUrl,
-        apiKey: this.cipher.decrypt(saved.apiKeyEncrypted),
-        model: saved.model,
-        apiFormat: saved.apiFormat,
-        timeoutMs: saved.timeoutMs,
-        maxFiles: saved.maxFiles,
-        maxSymbols: saved.maxSymbols,
-      };
-    }
-    const enabled = String(this.config.get('AI_ANALYSIS_ENABLED') ?? 'false').toLowerCase() === 'true';
-    if (!enabled) return null;
-    const apiKey = this.config.get<string>('AI_API_KEY')?.trim();
-    const model = this.config.get<string>('AI_MODEL')?.trim();
-    if (!apiKey || !model) throw new Error('AI 分析已开启，但 API Key 或模型未配置');
+    if (!saved?.enabled) return null;
     return {
-      baseUrl: (this.config.get<string>('AI_API_BASE_URL') ?? 'https://api.openai.com/v1').replace(/\/+$/, ''),
-      apiKey,
-      model,
-      apiFormat: this.config.get<string>('AI_API_FORMAT')?.toUpperCase() === 'ANTHROPIC'
-        || /\/anthropic\/?$/i.test(this.config.get<string>('AI_API_BASE_URL') ?? '')
-        ? 'ANTHROPIC' as const
-        : 'OPENAI' as const,
-      timeoutMs: this.positiveNumber('AI_ANALYSIS_TIMEOUT_MS', 90_000),
-      maxFiles: this.positiveNumber('AI_ANALYSIS_MAX_FILES', 80),
-      maxSymbols: this.positiveNumber('AI_ANALYSIS_MAX_SYMBOLS', 50),
+      baseUrl: saved.baseUrl,
+      apiKey: this.cipher.decrypt(saved.apiKeyEncrypted),
+      model: saved.model,
+      apiFormat: saved.apiFormat,
+      timeoutMs: saved.timeoutMs,
+      maxFiles: saved.maxFiles,
+      maxSymbols: saved.maxSymbols,
     };
   }
 

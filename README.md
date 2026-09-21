@@ -49,26 +49,7 @@ WEB_ORIGIN=http://localhost:5173
 VITE_API_TARGET=http://localhost:3012
 VITE_HOST=0.0.0.0
 REPOSITORY_CACHE_DIR=E:/AI/impact-flow/var/repositories
-VERSION_CHECK_ENABLED=true
-VERSION_CHECK_INTERVAL_MS=300000
-INSPECTION_LOG_RETENTION_DAYS=30
-SYMBOL_ANALYSIS_MAX_FILES=1500
-SYMBOL_ANALYSIS_MAX_RELATED_PROJECTS=5
-SYMBOL_ANALYSIS_RELATED_MAX_FILES=500
-AI_ANALYSIS_ENABLED=false
-AI_API_BASE_URL=https://api.openai.com/v1
-AI_API_FORMAT=OPENAI
-AI_API_KEY=
-AI_MODEL=
-AI_ANALYSIS_TIMEOUT_MS=90000
-AI_ANALYSIS_MAX_FILES=80
-AI_ANALYSIS_MAX_SYMBOLS=50
 AI_CONFIG_ENCRYPTION_KEY=replace-with-a-stable-private-secret
-ANALYSIS_WORKER_ENABLED=true
-ANALYSIS_WORKER_CONCURRENCY=2
-ANALYSIS_WORKER_POLL_INTERVAL_MS=1000
-ANALYSIS_TASK_TIMEOUT_MS=600000
-ANALYSIS_RETRY_BASE_MS=5000
 DATABASE_HOST=127.0.0.1
 DATABASE_PORT=3306
 DATABASE_NAME=impact_flow
@@ -138,15 +119,7 @@ pnpm --filter @impact-flow/api verify:workspace-schema
 
 一个账号可以同时属于多个工作空间。登录时按以下优先级确定进入哪一个：上次使用的工作空间 → 本人担任 OWNER 的空间 → 加入时间最早的空间。若账号不属于任何有效空间，登录会被拒绝。
 
-工作空间创建权限是**用户级策略**，不复用工作空间内的角色，由环境变量控制：
-
-```env
-WORKSPACE_CREATION_MODE=ANY_USER
-```
-
-- `ANY_USER`：任意活跃账号均可创建（默认）
-- `ADMIN_ONLY`：仅「至少是一个 ACTIVE 工作空间的 OWNER」的账号可创建
-- `DISABLED`：关闭页面自助创建，只能由部署方初始化
+任意已登录账号均可创建工作空间。工作空间内的项目、成员、AI 服务和自动化策略均按工作空间隔离。
 
 每个工作空间必须且只能有一个 OWNER。该约束由数据库层保证：`workspace_member.owner_workspace_id` 是只在 `role = 'OWNER'` 时才等于 `workspace_id` 的生成列，配合唯一键借助「NULL 不参与唯一性比较」实现。`workspace.owner_user_id` 是同一事实的冗余权威字段。应用不提供所有权转让功能，OWNER 不能被降级、移除或停用。
 
@@ -250,7 +223,7 @@ AI 分析默认关闭，并与变更分析分开执行。可在“AI 配置”�
 
 前端左侧的“日志管理”按页签统一展示变更分析、AI 分析与消息推送三类日志，支持按服务与结果筛选、分页与刷新。对应接口为 `GET /api/analyses/logs`（`type=CHANGE_ANALYSIS|AI_ANALYSIS`，`projectId`、`status` 均可选）和 `GET /api/pending-notification-config/logs`（`projectId`、`status` 均可选）。两个接口都强制按工作空间隔离，不传项目时返回该工作空间下的全部日志。
 
-基础配置中的自动化流程提供三个工作空间级策略：自动巡检默认开启，巡检后的自动变更分析和变更分析后的自动 AI 分析默认关闭。三个步骤按顺序依赖；自动 AI 分析还要求存在一条默认且已启用的 AI 配置。自动 AI 意图会快照到分析任务，应用重启后可继续恢复待启动任务；手动巡检和手动分析不受这些开关影响。环境变量 `VERSION_CHECK_ENABLED` 仍作为所有工作空间共用的系统级总开关。
+基础配置中的自动化流程提供三个工作空间级策略：自动巡检默认开启，巡检后的自动变更分析和变更分析后的自动 AI 分析默认关闭。三个步骤按顺序依赖；自动 AI 分析还要求当前工作空间存在一条默认且已启用的 AI 配置。自动 AI 意图会快照到分析任务，应用重启后可继续恢复待启动任务；手动巡检和手动分析不受这些开关影响。
 
 ## 验证
 

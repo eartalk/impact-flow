@@ -1,4 +1,3 @@
-import { ConfigService } from '@nestjs/config';
 import type { Project } from '@impact-flow/contracts';
 import { AutomationScheduler } from './automation.scheduler';
 
@@ -23,7 +22,6 @@ describe('AutomationScheduler', () => {
       projects as never,
       analyses as never,
       policies as never,
-      new ConfigService({ INSPECTION_LOG_RETENTION_DAYS: 30 }),
     );
 
     await (scheduler as unknown as { inspect(): Promise<void> }).inspect();
@@ -61,7 +59,6 @@ describe('AutomationScheduler', () => {
       projects as never,
       analyses as never,
       policies as never,
-      new ConfigService({}),
     );
 
     await (scheduler as unknown as { inspect(): Promise<void> }).inspect();
