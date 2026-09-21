@@ -1,5 +1,6 @@
 import type {
   AnalysisTask,
+  AutomationConfig,
   AnalysisLogPage,
   AnalysisLogQuery,
   AiProviderConfig,
@@ -9,12 +10,15 @@ import type {
   InspectionLog,
   InspectionLogPage,
   InspectionLogQuery,
+  NotificationDeliveryLogPage,
+  NotificationDeliveryLogQuery,
   PendingNotificationConfig,
   PendingNotificationConnectionTest,
   Project,
   RepositoryConnectionTest,
   UpdateProjectInput,
   UpdateAiProviderConfigInput,
+  UpdateAutomationConfigInput,
   UpdatePendingNotificationConfigInput,
   VersionDetection,
   AuthSession,
@@ -130,6 +134,13 @@ export const api = {
     return request<AnalysisLogPage>(`/api/analyses/logs?${params.toString()}`);
   },
   listAiConfigs: () => request<AiProviderConfig[]>('/api/ai-configs'),
+  getAutomationConfig: () =>
+    request<AutomationConfig>('/api/automation-config'),
+  updateAutomationConfig: (input: UpdateAutomationConfigInput) =>
+    request<AutomationConfig>('/api/automation-config', {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
   createAiConfig: (input: CreateAiProviderConfigInput) =>
     request<AiProviderConfig>('/api/ai-configs', {
       method: 'POST',
@@ -158,4 +169,14 @@ export const api = {
       '/api/pending-notification-config/test',
       { method: 'POST' },
     ),
+  listNotificationDeliveryLogs: (query: NotificationDeliveryLogQuery = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    const suffix = params.size ? `?${params.toString()}` : '';
+    return request<NotificationDeliveryLogPage>(
+      `/api/pending-notification-config/logs${suffix}`,
+    );
+  },
 };

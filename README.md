@@ -77,7 +77,16 @@ DATABASE_PASSWORD_BASE64=base64-encoded-admin-password
 DATABASE_PASSWORD_FILE=/run/secrets/mysql-root-password
 ```
 
-数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续执行 `database/013_complete_table_column_comments.sql` 和 `database/014_add_identity_workspace.sql`。
+数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/016_add_workspace_automation_policy.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段。
+
+增量脚本需要按序号手工执行，且**必须显式指定连接字符集**，否则中文表名注释与列注释会被写成乱码（Windows 下 mysql 客户端默认不是 utf8mb4）：
+
+```bash
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/015_merge_pending_notification_delivery.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/016_add_workspace_automation_policy.sql
+```
+
+脚本执行后可用 `SHOW FULL COLUMNS FROM <table>` 或查询 `information_schema.COLUMNS` 的 `COLUMN_COMMENT` 复核注释是否正常。
 
 首次打开页面会进入系统初始化，创建首位工作空间所有者。系统不提供公开注册，后续账号由所有者或管理员在成员管理中创建。登录会话保存在 HttpOnly Cookie 中，项目、AI 配置和通知配置均按工作空间隔离。
 
@@ -118,6 +127,9 @@ POST /api/ai-configs/:id/test
 GET  /api/pending-notification-config
 PATCH /api/pending-notification-config
 POST /api/pending-notification-config/test
+GET  /api/pending-notification-config/logs
+GET  /api/automation-config
+PATCH /api/automation-config
 ```
 
 首次分析使用生产分支当前提交的第一父提交作为基线；之后使用项目上一次成功分析的目标 Commit 作为基线。只有 Git Diff 成功后才推进基线，失败任务不会影响下一次分析。
@@ -127,6 +139,12 @@ Symbol 分析支持 TypeScript、TSX 与 Vue SFC，能够识别 NestJS `@Control
 AI 分析默认关闭，并与变更分析分开执行。可在“AI 配置”页维护多条 OpenAI Chat Completions 或 Anthropic Messages 兼容接口，并选择一条默认启用配置。API Key 使用 `AI_CONFIG_ENCRYPTION_KEY`（未配置时回退数据库密码材料）派生密钥加密保存，页面只返回末四位。模型接收提交摘要、文件元数据、Symbol 调用链以及受控 Git Diff 证据：最多 24 个文本文件、单文件 5000 字符、总计 40000 字符；环境文件、证书、锁文件、构建产物和疑似密钥值会被过滤或脱敏。调用失败不会影响变更分析任务完成。
 
 基础配置中的“待检测通知”支持启停和钉钉群机器人 Webhook。巡检发现待检测提交后发送通知，并通过项目与目标 Commit 去重；发送失败不会影响巡检结果，下次巡检会继续重试。Webhook 使用与 AI API Key 相同的加密材料保存，接口只返回掩码。
+
+每次通知投递都会写入 `pending_notification_delivery`（成功与失败都记录），包含渠道、第几次尝试、失败错误码与原因。该表同时承担去重职责：`delivered_commit` 是只在投递成功时才写入 `<target_commit>` 的生成列，配合唯一键 `(project_id, delivered_commit)` 借助 MySQL「NULL 不参与唯一性比较」的特性，实现同一服务同一提交最多成功通知一次，而失败的尝试可以持续追加。失败原因取自钉钉返回的 `errcode`/`errmsg`，网络异常与非法地址分别归类为 `NETWORK`、`INVALID_WEBHOOK`。
+
+前端左侧的“日志管理”按页签统一展示变更分析、AI 分析与消息推送三类日志，支持按服务与结果筛选、分页与刷新。对应接口为 `GET /api/analyses/logs`（`type=CHANGE_ANALYSIS|AI_ANALYSIS`，`projectId`、`status` 均可选）和 `GET /api/pending-notification-config/logs`（`projectId`、`status` 均可选）。两个接口都强制按工作空间隔离，不传项目时返回该工作空间下的全部日志。
+
+基础配置中的自动化流程提供三个工作空间级策略：自动巡检默认开启，巡检后的自动变更分析和变更分析后的自动 AI 分析默认关闭。三个步骤按顺序依赖；自动 AI 分析还要求存在一条默认且已启用的 AI 配置。自动 AI 意图会快照到分析任务，应用重启后可继续恢复待启动任务；手动巡检和手动分析不受这些开关影响。环境变量 `VERSION_CHECK_ENABLED` 仍作为所有工作空间共用的系统级总开关。
 
 ## 验证
 

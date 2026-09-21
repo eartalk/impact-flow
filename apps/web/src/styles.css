@@ -698,18 +698,103 @@ input:focus-visible {
 }
 
 .analysis-log-row {
-  min-width: 840px;
+  min-width: 1010px;
   min-height: 56px;
   padding: 0 14px;
   display: grid;
-  grid-template-columns: 132px 190px 100px 70px 48px;
+  grid-template-columns: 132px 150px 190px 100px 70px 48px;
   gap: 12px;
   align-items: center;
   border-bottom: 1px solid var(--border-light);
 }
 
 .analysis-log-row.is-ai {
-  grid-template-columns: 132px 180px 88px minmax(120px, 1fr) 70px 62px 48px;
+  grid-template-columns:
+    132px 150px 180px 88px minmax(120px, 1fr) 70px 62px 48px;
+}
+
+.analysis-log-project {
+  overflow: hidden;
+  color: #344456;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 日志管理：消息推送日志表格 */
+.delivery-log-row {
+  min-width: 1010px;
+  min-height: 56px;
+  padding: 0 14px;
+  display: grid;
+  grid-template-columns: 132px 150px 90px 86px 74px 72px minmax(220px, 1fr);
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.delivery-log-row.failed {
+  background: #fff8f7;
+}
+
+.delivery-log-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 40px;
+  color: #7b8592;
+  background: var(--surface-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 与分析日志表格保持同一字号体系 */
+.delivery-log-row time,
+.delivery-log-row > span {
+  color: #66717d;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.delivery-log-row code {
+  overflow: hidden;
+  color: #485665;
+  font: 600 10px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 与分析日志表格保持同一字号体系（字号/颜色由上面的通用规则统一控制） */
+.delivery-log-project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-log-body .delivery-log-row:hover {
+  background: #f7faff;
+}
+
+.analysis-log-body .delivery-log-row:last-child {
+  border-bottom: 0;
+}
+
+.delivery-log-row .delivery-log-attempt {
+  color: #929ba5;
+}
+
+.delivery-log-row .delivery-log-error {
+  overflow: hidden;
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delivery-log-row:not(.failed) .delivery-log-error {
+  color: #b6bdc5;
 }
 
 .analysis-log-head {
@@ -2209,12 +2294,126 @@ input:focus-visible {
   font-size: 9px;
 }
 
+.automation-config-section,
 .notification-config-section {
   margin-top: 36px;
 }
 
+.automation-config-section .base-config-section-header,
 .notification-config-section .base-config-section-header {
   min-height: auto;
+}
+
+.automation-config-group {
+  margin-top: 14px;
+}
+
+.automation-flow {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto minmax(220px, 1fr) auto minmax(220px, 1fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.automation-step {
+  min-height: 92px;
+  padding: 15px;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  gap: 8px 10px;
+  color: #687481;
+  background: #f7f9fa;
+  border: 1px solid #e2e7eb;
+  border-left: 3px solid #c5cdd5;
+}
+
+.automation-step.selectable {
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.automation-step.selectable:hover {
+  border-color: #9fcfc3;
+  box-shadow: 0 5px 16px rgba(38, 92, 80, 0.08);
+  transform: translateY(-1px);
+}
+
+.automation-step.selectable:focus-visible {
+  outline: 2px solid #25a9c0;
+  outline-offset: 2px;
+}
+
+.automation-step.enabled {
+  background: #f1f9f7;
+  border-color: #c6e2da;
+  border-left-color: #19a887;
+}
+
+.automation-step-index {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  background: #aeb8c2;
+  border-radius: 50%;
+  font: 600 10px/1 var(--font-mono);
+}
+
+.automation-step.enabled .automation-step-index {
+  background: #19a887;
+}
+
+.automation-step strong,
+.automation-step small {
+  display: block;
+}
+
+.automation-step strong {
+  color: #344456;
+  font-size: 13px;
+}
+
+.automation-step small {
+  margin-top: 5px;
+  color: #8a95a1;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.automation-step .state-toggle {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.automation-flow-arrow {
+  align-self: center;
+  color: #aab4be;
+  font: 500 18px/1 var(--font-mono);
+}
+
+.automation-config-footer {
+  min-height: 58px;
+  padding: 12px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.automation-config-footer span {
+  color: #929ba5;
+  font-size: 10px;
+}
+
+.automation-config-footer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .notification-config-group {
@@ -2315,6 +2514,61 @@ input:focus-visible {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* 日志管理视图 */
+.logs-section .base-config-section-header {
+  min-height: auto;
+}
+
+.logs-tabs {
+  margin-top: 14px;
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logs-tabs button {
+  padding: 9px 18px;
+  color: #687481;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.logs-tabs button:hover {
+  color: #0c9ab4;
+}
+
+.logs-tabs button.active {
+  color: #0c9ab4;
+  border-bottom-color: #16b4c9;
+  font-weight: 500;
+}
+
+.logs-filters {
+  margin: 14px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logs-filters .el-select {
+  width: 190px;
+}
+
+.logs-filters button {
+  gap: 6px;
+}
+
+.logs-filter-count {
+  margin-left: auto;
+  color: #929ba5;
+  font-size: 11px;
+}
+
 
 .ai-config-panel {
   margin: 14px 18px 24px;
@@ -2707,6 +2961,15 @@ input:focus-visible {
 }
 
 @media (max-width: 900px) {
+  .automation-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-flow-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+
   .ai-config-setting-line {
     grid-template-columns: 1fr 1fr;
   }
