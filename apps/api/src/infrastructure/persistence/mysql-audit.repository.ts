@@ -7,6 +7,7 @@ import type {
   AuditWriteInput,
 } from '../../core/ports/audit.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 type AuditRow = RowDataPacket & {
   id: string;
@@ -127,7 +128,7 @@ export class MysqlAuditRepository implements AuditRepository {
       resourceId: row.resource_id,
       detail,
       ipAddress: row.ip_address,
-      createdAt: new Date(row.created_at).toISOString(),
+      createdAt: mysqlDateTimeToIso(row.created_at),
     };
   }
 }

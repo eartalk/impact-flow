@@ -19,6 +19,7 @@ services:
       - .env
     environment:
       NODE_ENV: production
+      TZ: Asia/Shanghai
       API_PORT: 3012
       DATABASE_HOST: my-mysql
       DATABASE_PORT: 3306

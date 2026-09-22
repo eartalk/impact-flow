@@ -13,6 +13,7 @@ import type {
 } from '@impact-flow/contracts';
 import type { ProjectRepository } from '../../core/ports/project.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 type ProjectRow = RowDataPacket & {
   id: string;
@@ -336,8 +337,8 @@ export class MysqlProjectRepository implements ProjectRepository {
         detectedCommit: row.detected_commit,
         pendingCommitCount: row.pending_commit_count,
         errorMessage: row.error_message,
-        startedAt: new Date(row.started_at).toISOString(),
-        finishedAt: row.finished_at ? new Date(row.finished_at).toISOString() : null,
+        startedAt: mysqlDateTimeToIso(row.started_at),
+        finishedAt: row.finished_at ? mysqlDateTimeToIso(row.finished_at) : null,
       })),
       total,
       page: currentPage,
@@ -380,11 +381,11 @@ export class MysqlProjectRepository implements ProjectRepository {
       pendingCommitCount: row.pending_commit_count,
       pendingCommits,
       lastCheckedAt: row.last_checked_at
-        ? new Date(row.last_checked_at).toISOString()
+        ? mysqlDateTimeToIso(row.last_checked_at)
         : null,
       checkStatus: row.check_status,
       checkError: row.check_error,
-      createdAt: new Date(row.created_at).toISOString(),
+      createdAt: mysqlDateTimeToIso(row.created_at),
     };
   }
 }

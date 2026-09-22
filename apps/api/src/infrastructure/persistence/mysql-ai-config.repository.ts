@@ -10,6 +10,7 @@ import type {
   StoredAiProviderConfig,
 } from '../../core/ports/ai-config.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 type AiConfigRow = RowDataPacket & {
   id: string;
@@ -195,8 +196,8 @@ export class MysqlAiConfigRepository implements AiConfigRepository {
       timeoutMs: row.timeout_ms,
       maxFiles: row.max_files,
       maxSymbols: row.max_symbols,
-      createdAt: new Date(row.created_at).toISOString(),
-      updatedAt: new Date(row.updated_at).toISOString(),
+      createdAt: mysqlDateTimeToIso(row.created_at),
+      updatedAt: mysqlDateTimeToIso(row.updated_at),
     };
   }
 }

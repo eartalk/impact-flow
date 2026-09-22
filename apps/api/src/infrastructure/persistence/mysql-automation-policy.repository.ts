@@ -6,6 +6,7 @@ import type {
   StoredAutomationPolicy,
 } from '../../core/ports/automation-policy.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 type AutomationPolicyRow = RowDataPacket & {
   automation_code: AutomationCode;
@@ -71,7 +72,7 @@ export class MysqlAutomationPolicyRepository
           : row.settings
         : null,
       configVersion: Number(row.config_version),
-      updatedAt: new Date(row.updated_at).toISOString(),
+      updatedAt: mysqlDateTimeToIso(row.updated_at),
     };
   }
 }

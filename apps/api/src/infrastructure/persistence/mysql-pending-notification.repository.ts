@@ -13,6 +13,7 @@ import type {
   StoredPendingNotificationConfig,
 } from '../../core/ports/pending-notification.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 type NotificationConfigRow = RowDataPacket & {
   enabled: number;
@@ -192,7 +193,7 @@ export class MysqlPendingNotificationRepository
       enabled: Boolean(row.enabled),
       webhookEncrypted: row.webhook_encrypted,
       webhookHint: row.webhook_hint,
-      updatedAt: new Date(row.updated_at).toISOString(),
+      updatedAt: mysqlDateTimeToIso(row.updated_at),
     };
   }
 
@@ -209,7 +210,7 @@ export class MysqlPendingNotificationRepository
       status: row.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
       errorCode: row.error_code,
       errorMessage: row.error_message,
-      createdAt: new Date(row.created_at).toISOString(),
+      createdAt: mysqlDateTimeToIso(row.created_at),
     };
   }
 }

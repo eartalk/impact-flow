@@ -13,6 +13,7 @@ import type {
 } from '@impact-flow/contracts';
 import type { AnalysisRepository } from '../../core/ports/analysis.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 type AnalysisRow = RowDataPacket & {
   id: string;
@@ -569,14 +570,14 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       aiAnalysis,
       aiAnalysisRequested: Boolean(row.ai_analysis_requested),
       commits,
-      createdAt: new Date(row.created_at).toISOString(),
+      createdAt: mysqlDateTimeToIso(row.created_at),
       finishedAt: row.finished_at
-        ? new Date(row.finished_at).toISOString()
+        ? mysqlDateTimeToIso(row.finished_at)
         : null,
       attemptCount: Number(row.attempt_count ?? 0),
       maxAttempts: Number(row.max_attempts ?? 3),
       nextAttemptAt: row.next_attempt_at
-        ? new Date(row.next_attempt_at).toISOString()
+        ? mysqlDateTimeToIso(row.next_attempt_at)
         : null,
     };
   }
@@ -594,8 +595,8 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       model: row.model,
       errorMessage: row.error_message,
       tokenUsage: this.parseJson(row.token_usage) ?? null,
-      startedAt: new Date(row.started_at).toISOString(),
-      finishedAt: row.finished_at ? new Date(row.finished_at).toISOString() : null,
+      startedAt: mysqlDateTimeToIso(row.started_at),
+      finishedAt: row.finished_at ? mysqlDateTimeToIso(row.finished_at) : null,
       durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
     };
   }

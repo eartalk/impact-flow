@@ -12,6 +12,7 @@ import type {
   WorkspaceRepository,
 } from '../../core/ports/workspace.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 type WorkspaceRow = RowDataPacket & {
   id: string;
@@ -249,8 +250,8 @@ export class MysqlWorkspaceRepository implements WorkspaceRepository {
       ownerUserId: row.owner_user_id,
       memberCount: Number(row.member_count),
       projectCount: Number(row.project_count),
-      createdAt: new Date(row.created_at).toISOString(),
-      archivedAt: row.archived_at ? new Date(row.archived_at).toISOString() : null,
+      createdAt: mysqlDateTimeToIso(row.created_at),
+      archivedAt: row.archived_at ? mysqlDateTimeToIso(row.archived_at) : null,
     };
   }
 }

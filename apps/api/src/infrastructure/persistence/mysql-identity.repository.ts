@@ -14,6 +14,7 @@ import type {
   StoredUser,
 } from '../../core/ports/identity.repository';
 import { DatabaseService } from './database.service';
+import { mysqlDateTimeToIso } from './mysql-datetime';
 
 const DEFAULT_WORKSPACE_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -419,7 +420,7 @@ export class MysqlIdentityRepository implements IdentityRepository {
       displayName: row.display_name,
       status: row.status,
       role: row.role,
-      joinedAt: new Date(row.joined_at).toISOString(),
+      joinedAt: mysqlDateTimeToIso(row.joined_at),
     };
   }
 }

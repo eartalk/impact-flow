@@ -28,7 +28,8 @@ export class DatabaseService implements OnModuleDestroy {
       database: this.config.get('DATABASE_NAME', 'impact_flow'),
       charset: 'utf8mb4',
       connectionLimit: 10,
-      timezone: 'Z',
+      // MySQL DATETIME stores Beijing wall-clock values without an offset.
+      timezone: '+08:00',
       dateStrings: true,
     });
 
