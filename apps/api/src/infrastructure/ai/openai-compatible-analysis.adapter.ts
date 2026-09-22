@@ -62,10 +62,13 @@ export class OpenAiCompatibleAnalysisAdapter implements AiAnalyzerGateway {
         '不得声称看过未提供的源码，不得编造调用链、接口或业务事实。',
         '输出必须是一个严格合法的 JSON 对象。第一个字符必须是 {，最后一个字符必须是 }。',
         '禁止输出 Markdown、代码围栏、XML 标签、前言、后记或 JSON 之外的任何字符。',
-        '严格使用以下结构：{"summary":"string","riskLevel":"LOW|MEDIUM|HIGH|CRITICAL","keyFindings":["string"],"regressionSuggestions":[{"title":"string","scope":"string","priority":"P0|P1|P2","entryPoints":["string"],"scenarios":["string"],"steps":["string"],"expectedResults":["string"],"evidence":["string"],"confidence":"HIGH|MEDIUM|LOW"}]}。',
-        'summary 不超过 300 个汉字；keyFindings 最多 6 项；regressionSuggestions 最多 8 项。每项必须给出可执行场景、步骤、预期结果和代码依据。',
-        'entryPoints 填具体 HTTP/RPC 路由、任务、方法或页面入口；evidence 必须引用输入中真实存在的文件、Symbol、路由、调用链或 Diff 行，不得使用“相关代码”等模糊描述。',
-        '如果证据不足，confidence 必须为 LOW，并在 scope 中明确写“根据当前证据无法确认”的具体部分。禁止输出“全面回归相关功能”一类不可执行建议。',
+        '严格使用以下结构：{"summary":"string","riskLevel":"LOW|MEDIUM|HIGH|CRITICAL","keyFindings":["string"],"regressionSuggestions":[{"title":"string","scope":"string","priority":"P0|P1|P2","businessDomain":"string","businessScenario":"string","boundaryType":"HTTP|PAGE|JOB|MESSAGE|DATA|TECHNICAL|UNKNOWN","technicalConfidence":"HIGH|MEDIUM|LOW","businessConfidence":"HIGH|MEDIUM|LOW","targetType":"PAGE|API|JOB|MODULE|DATA|CONFIG|SYMBOL|FILE","impactRelation":"DIRECT|UPSTREAM|CROSS_REPOSITORY|RELATED|UNKNOWN","coverageStatus":"CONFIRMED|RECOMMENDED|NEEDS_REVIEW","entryPoints":["string"],"evidence":["string"],"confidence":"HIGH|MEDIUM|LOW"}]}。',
+        'summary 不超过 300 个汉字；keyFindings 最多 6 项。regressionSuggestions 是“必须关注的回归范围”，不是测试用例；重点回答要测试哪些页面、接口、任务、数据链路或公共模块，以及为什么受影响。',
+        'entryPoints 填具体 HTTP/RPC 路由、任务、方法或页面入口；evidence 必须引用输入中真实存在的文件、Symbol、路由、调用链或 Diff 行，不得使用“相关代码”等模糊描述。不要生成操作步骤、正常异常边界场景等模板话术。',
+        '优先按业务域和业务场景聚合，不要为每个 Service 或方法单独输出一项。技术方法只能作为 evidence；title 和 businessScenario 必须使用业务语言。',
+        '只有输入明确提供 HTTP 路由、页面、任务或消息入口时，才能把 boundaryType 标为对应边界。仅根据方法名推断业务时，boundaryType 必须为 TECHNICAL，businessConfidence 不得为 HIGH。',
+        '尽量覆盖输入中每一条直接变更和调用链影响。无法定位业务入口时仍需输出一项，coverageStatus 设为 NEEDS_REVIEW、impactRelation 设为 UNKNOWN，并明确说明未确认范围，不能静默遗漏。',
+        '如果证据不足，confidence 必须为 LOW，并在 scope 中明确写“根据当前证据无法确认”的具体部分。禁止输出“全面回归相关功能”一类空泛建议。',
         '证据不足时明确写“根据当前元数据无法确认”，不要补造事实。使用简体中文，结论简洁并说明依据。',
       ].join('\n'),
       JSON.stringify(this.promptInput(input, maxFiles, maxSymbols)),
@@ -333,10 +336,44 @@ export class OpenAiCompatibleAnalysisAdapter implements AiAnalyzerGateway {
       const confidence = ['HIGH', 'MEDIUM', 'LOW'].includes(String(candidate.confidence))
         ? candidate.confidence as NonNullable<RegressionSuggestion['confidence']>
         : 'LOW';
+      const targetType = ['PAGE', 'API', 'JOB', 'MODULE', 'DATA', 'CONFIG', 'SYMBOL', 'FILE']
+        .includes(String(candidate.targetType))
+        ? candidate.targetType as NonNullable<RegressionSuggestion['targetType']>
+        : undefined;
+      const impactRelation = ['DIRECT', 'UPSTREAM', 'CROSS_REPOSITORY', 'RELATED', 'UNKNOWN']
+        .includes(String(candidate.impactRelation))
+        ? candidate.impactRelation as NonNullable<RegressionSuggestion['impactRelation']>
+        : undefined;
+      const coverageStatus = ['CONFIRMED', 'RECOMMENDED', 'NEEDS_REVIEW']
+        .includes(String(candidate.coverageStatus))
+        ? candidate.coverageStatus as NonNullable<RegressionSuggestion['coverageStatus']>
+        : undefined;
+      const boundaryType = ['HTTP', 'PAGE', 'JOB', 'MESSAGE', 'DATA', 'TECHNICAL', 'UNKNOWN']
+        .includes(String(candidate.boundaryType))
+        ? candidate.boundaryType as NonNullable<RegressionSuggestion['boundaryType']>
+        : undefined;
+      const technicalConfidence = ['HIGH', 'MEDIUM', 'LOW'].includes(String(candidate.technicalConfidence))
+        ? candidate.technicalConfidence as NonNullable<RegressionSuggestion['technicalConfidence']>
+        : undefined;
+      const businessConfidence = ['HIGH', 'MEDIUM', 'LOW'].includes(String(candidate.businessConfidence))
+        ? candidate.businessConfidence as NonNullable<RegressionSuggestion['businessConfidence']>
+        : undefined;
       return [{
         title: candidate.title.trim().slice(0, 200),
         scope: candidate.scope.trim().slice(0, 1000),
         priority,
+        targetType,
+        impactRelation,
+        coverageStatus,
+        businessDomain: typeof candidate.businessDomain === 'string'
+          ? candidate.businessDomain.trim().slice(0, 100)
+          : undefined,
+        businessScenario: typeof candidate.businessScenario === 'string'
+          ? candidate.businessScenario.trim().slice(0, 200)
+          : undefined,
+        boundaryType,
+        technicalConfidence,
+        businessConfidence,
         entryPoints: this.stringList(candidate.entryPoints, 8, 300),
         scenarios: this.stringList(candidate.scenarios, 10, 500),
         steps: this.stringList(candidate.steps, 12, 500),

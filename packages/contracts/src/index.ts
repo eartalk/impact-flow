@@ -29,6 +29,24 @@ export interface RegressionSuggestion {
   title: string;
   scope: string;
   priority: 'P0' | 'P1' | 'P2';
+  /** 回归对象类型；用于回答“具体要回归哪里”。 */
+  targetType?: 'PAGE' | 'API' | 'JOB' | 'MODULE' | 'DATA' | 'CONFIG' | 'SYMBOL' | 'FILE';
+  /** 该对象与本次代码变更之间的关系。 */
+  impactRelation?: 'DIRECT' | 'UPSTREAM' | 'CROSS_REPOSITORY' | 'RELATED' | 'UNKNOWN';
+  /** 静态分析对该范围的确认程度，而不是测试执行状态。 */
+  coverageStatus?: 'CONFIRMED' | 'RECOMMENDED' | 'NEEDS_REVIEW';
+  /** 面向产品和测试人员的业务域，例如“工地问题”“工期管理”。 */
+  businessDomain?: string;
+  /** 面向产品和测试人员的具体业务动作或场景。 */
+  businessScenario?: string;
+  /** 静态分析最终追踪到的业务边界类型。 */
+  boundaryType?: 'HTTP' | 'PAGE' | 'JOB' | 'MESSAGE' | 'DATA' | 'TECHNICAL' | 'UNKNOWN';
+  /** 调用关系本身的可信程度。 */
+  technicalConfidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+  /** 业务命名和归属的可信程度。 */
+  businessConfidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+  /** 被该业务范围覆盖的原始变更 Symbol，用于计算覆盖率。 */
+  sourceSymbolKeys?: string[];
   entryPoints?: string[];
   scenarios?: string[];
   steps?: string[];
@@ -242,7 +260,9 @@ export interface Project {
   lastAnalyzedCommit: string | null;
   detectedCommit: string | null;
   previousDetectedCommit: string | null;
+  /** 待检测合并数量；属性名为历史API兼容保留。 */
   pendingCommitCount: number;
+  /** 待检测合并提交摘要；属性名为历史API兼容保留。 */
   pendingCommits?: CommitSummary[];
   lastCheckedAt: string | null;
   checkStatus: 'IDLE' | 'RUNNING' | 'SUCCESS' | 'FAILED';
@@ -260,6 +280,7 @@ export interface InspectionLog {
   triggerType: InspectionTrigger;
   status: 'RUNNING' | 'SUCCESS' | 'FAILED';
   detectedCommit: string | null;
+  /** 本次巡检发现的待检测合并数量；属性名为历史API兼容保留。 */
   pendingCommitCount: number;
   errorMessage: string | null;
   startedAt: string;

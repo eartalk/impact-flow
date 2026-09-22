@@ -12,6 +12,7 @@ import type {
   SymbolChange,
   SymbolImpact,
 } from '@impact-flow/contracts';
+import { BusinessImpactResolver } from '../../core/services/business-impact.resolver';
 import type {
   SymbolAnalysisResult,
   SymbolAnalyzerGateway,
@@ -66,6 +67,8 @@ type RepositoryModel = {
 
 @Injectable()
 export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
+  private readonly business = new BusinessImpactResolver();
+
   constructor(private readonly config: ConfigService) {}
 
   async analyzeRange(input: {
@@ -114,6 +117,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     await this.registerProjectAlias(git, input.targetCommit, input.projectId, projectAliases);
 
     let relatedProjectCount = 0;
+    let relatedProjectFailureCount = 0;
     const maxRelatedProjects = 5;
     const relatedMaxFiles = 500;
     for (const related of (input.relatedRepositories ?? []).slice(0, maxRelatedProjects)) {
@@ -139,6 +143,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
         relatedProjectCount += 1;
       } catch {
         // Related repositories are best-effort and must not fail the primary analysis.
+        relatedProjectFailureCount += 1;
       }
     }
     const targetModel = this.buildModel(targetSources, projectAliases);
@@ -155,7 +160,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     );
     const baseModel = this.buildModel(baseSources, projectAliases);
     const symbolChanges = this.findChanges(diffs, baseModel, targetModel, input.projectId);
-    const symbolImpacts = this.findImpacts(symbolChanges, targetModel, 3);
+    const symbolImpacts = this.findImpacts(symbolChanges, targetModel, 6);
     const analyzedFileCount = targetModel.files.size;
     const crossRepositoryImpacts = symbolImpacts.filter(
       (item) => item.impactedSymbol.projectId !== input.projectId,
@@ -163,11 +168,25 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     const httpRouteImpacts = symbolImpacts.filter(
       (item) => item.reason.startsWith('通过 HTTP '),
     ).length;
+    const limitationNotes = [
+      targetPaths.length > maxFiles
+        ? `主仓库仅扫描前 ${maxFiles}/${targetPaths.length} 个源码文件`
+        : null,
+      (input.relatedRepositories?.length ?? 0) > maxRelatedProjects
+        ? `相关仓库仅扫描前 ${maxRelatedProjects}/${input.relatedRepositories?.length} 个`
+        : null,
+      relatedProjectFailureCount
+        ? `${relatedProjectFailureCount} 个相关仓库读取失败`
+        : null,
+    ].filter(Boolean);
+    const limitationSummary = limitationNotes.length
+      ? `；分析范围受限：${limitationNotes.join('、')}`
+      : '';
 
     return {
       symbolSummary: symbolChanges.length
-        ? `识别到 ${symbolChanges.length} 个变更 Symbol，追踪到 ${symbolImpacts.length} 个上游调用影响${crossRepositoryImpacts ? `，其中 ${crossRepositoryImpacts} 个跨仓库影响` : ''}${httpRouteImpacts ? `、${httpRouteImpacts} 个 HTTP 路由影响` : ''}（已扫描 ${analyzedFileCount} 个 TypeScript/Vue 文件、${relatedProjectCount} 个相关仓库）`
-        : `TypeScript/Vue 文件存在变更，但未映射到可识别的代码 Symbol（已扫描 ${analyzedFileCount} 个文件）`,
+        ? `识别到 ${symbolChanges.length} 个变更 Symbol，追踪到 ${symbolImpacts.length} 个上游调用影响${crossRepositoryImpacts ? `，其中 ${crossRepositoryImpacts} 个跨仓库影响` : ''}${httpRouteImpacts ? `、${httpRouteImpacts} 个 HTTP 路由影响` : ''}（已扫描 ${analyzedFileCount} 个 TypeScript/Vue 文件、${relatedProjectCount} 个相关仓库）${limitationSummary}`
+        : `TypeScript/Vue 文件存在变更，但未映射到可识别的代码 Symbol（已扫描 ${analyzedFileCount} 个文件）${limitationSummary}`,
       symbolChanges,
       symbolImpacts,
     };
@@ -1102,11 +1121,19 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
               ? `通过 ${depth} 层调用依赖产生跨仓库影响`
               : `通过 ${depth} 层调用或接口实现关系受影响`,
           });
-          queue.push({ key: callerKey, chain: callChain, depth });
+          // 业务边界已经能够回答“从哪里回归”，无需继续向框架和外层包装扩散。
+          const hasCrossRepositoryCaller = [...(model.reverseCalls.get(callerKey) ?? [])]
+            .some((nextKey) => {
+              const next = model.symbols.get(nextKey);
+              return next?.projectId && next.projectId !== caller.projectId;
+            });
+          if (!this.business.isBoundary(caller) || hasCrossRepositoryCaller) {
+            queue.push({ key: callerKey, chain: callChain, depth });
+          }
         }
       }
     }
-    return [...impacts.values()].sort((a, b) => a.depth - b.depth).slice(0, 200);
+    return [...impacts.values()].sort((a, b) => a.depth - b.depth).slice(0, 500);
   }
 
   private matchingHttpRelation(

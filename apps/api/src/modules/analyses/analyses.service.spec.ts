@@ -159,8 +159,8 @@ describe('AnalysesService', () => {
     expect(analyses.complete).toHaveBeenCalled();
     expect(analyses.updateProgress.mock.calls.map((call) => call[1].stage)).toEqual([
       'SYNCING_REPOSITORY',
-      'ANALYZING_IMPACT',
       'ANALYZING_SYMBOLS',
+      'ANALYZING_IMPACT',
       'SAVING_RESULT',
     ]);
     expect(aiAnalyzer.analyze).not.toHaveBeenCalled();

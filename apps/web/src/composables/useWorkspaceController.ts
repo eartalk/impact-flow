@@ -86,6 +86,9 @@ const analysisLogs = ref<AnalysisExecutionLog[]>([]);
 const deliveryLogs = ref<NotificationDeliveryLog[]>([]);
 const expandedProjectIds = ref<string[]>([]);
 const analysisDetails = ref<Record<string, AnalysisTask>>({});
+const analysisPollingError = ref<string | null>(null);
+const analysisPollingFailedAt = ref<string | null>(null);
+const analysisPolling = ref(false);
 const expandedDetailSections = ref<string[]>([]);
 const aiConfigs = ref<AiProviderConfig[]>([]);
 const aiConfigLoading = ref(false);
@@ -120,6 +123,7 @@ const auditTotal = ref(0);
 const auditTotalPages = ref(1);
 let projectRefreshTimer: ReturnType<typeof setInterval> | undefined;
 let analysisPollTimer: ReturnType<typeof setInterval> | undefined;
+let analysisPollInFlight = false;
 
 const form = reactive<CreateProjectInput>({
   name: "",
@@ -270,6 +274,9 @@ function resetWorkspaceScopedState() {
   projects.value = [];
   analyses.value = [];
   analysisDetails.value = {};
+  analysisPollingError.value = null;
+  analysisPollingFailedAt.value = null;
+  analysisPolling.value = false;
   expandedProjectIds.value = [];
   expandedDetailSections.value = [];
   connectionResults.value = {};
@@ -1459,8 +1466,10 @@ async function testProjectConnection(project: Project) {
   }
 }
 
-async function pollActiveAnalyses() {
+async function pollActiveAnalyses(force = false) {
+  if (analysisPollInFlight) return;
   if (
+    !force &&
     !analyses.value.some(
       (task) =>
         ["READY", "RUNNING"].includes(task.status) ||
@@ -1469,6 +1478,8 @@ async function pollActiveAnalyses() {
   ) {
     return;
   }
+  analysisPollInFlight = true;
+  analysisPolling.value = true;
   try {
     const previous = new Map(
       analyses.value.map((task) => [
@@ -1478,6 +1489,8 @@ async function pollActiveAnalyses() {
     );
     const next = await api.listAnalyses();
     analyses.value = next;
+    analysisPollingError.value = null;
+    analysisPollingFailedAt.value = null;
     for (const task of next) {
       if (
         expandedProjectIds.value.includes(task.projectId) &&
@@ -1515,9 +1528,20 @@ async function pollActiveAnalyses() {
     ) {
       projects.value = await api.listProjects();
     }
-  } catch {
-    // 轮询失败时保留当前状态，下一轮继续尝试。
+  } catch (error) {
+    // 保留当前数据并继续自动重试，但必须明确提示页面数据可能已经过期。
+    analysisPollingError.value = error instanceof Error
+      ? error.message
+      : "分析状态刷新失败";
+    analysisPollingFailedAt.value = new Date().toISOString();
+  } finally {
+    analysisPollInFlight = false;
+    analysisPolling.value = false;
   }
+}
+
+function refreshAnalysisStatus() {
+  return pollActiveAnalyses(true);
 }
 
 onMounted(() => void initializeAuth());
@@ -1560,6 +1584,9 @@ onBeforeUnmount(() => {
     deliveryLogs,
     expandedProjectIds,
     analysisDetails,
+    analysisPollingError,
+    analysisPollingFailedAt,
+    analysisPolling,
     expandedDetailSections,
     aiConfigs,
     aiConfigLoading,
@@ -1723,6 +1750,7 @@ onBeforeUnmount(() => {
     startAiAnalysis,
     testProjectConnection,
     pollActiveAnalyses,
+    refreshAnalysisStatus,
   };
 }
 

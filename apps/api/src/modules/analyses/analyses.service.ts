@@ -230,11 +230,9 @@ export class AnalysesService {
             workerId,
           ),
       });
-      await this.updateProgress(task.id, 'ANALYZING_IMPACT', 55, '正在评估变更影响与回归范围', workerId);
-      const impact = this.impactAnalyzer.analyze(result);
       let symbolAnalysis;
       try {
-        await this.updateProgress(task.id, 'ANALYZING_SYMBOLS', 75, '正在分析 Symbol 变更与调用链', workerId);
+        await this.updateProgress(task.id, 'ANALYZING_SYMBOLS', 55, '正在分析 Symbol 变更与调用链', workerId);
         // 关联仓库必须限定在与被分析项目相同的工作空间内，
         // 否则会把其他工作空间的服务名与提交纳入本空间的分析结果
         const relatedRepositories = (await this.projects.findAll(project.workspaceId))
@@ -260,6 +258,11 @@ export class AnalysesService {
           symbolImpacts: [],
         };
       }
+      await this.updateProgress(task.id, 'ANALYZING_IMPACT', 78, '正在汇总直接、间接影响与待确认范围', workerId);
+      const impact = this.impactAnalyzer.analyze({
+        ...result,
+        ...symbolAnalysis,
+      });
       await this.updateProgress(task.id, 'SAVING_RESULT', 90, '分析已完成，正在保存结果', workerId);
       const completed = await this.analyses.complete(task.id, {
         ...result,

@@ -92,8 +92,8 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
   async findAll(workspaceId: string): Promise<AnalysisTask[]> {
     const db = await this.database.connection();
     const [rows] = await db.query<AnalysisRow[]>(
-      `${this.baseSelect()} WHERE p.workspace_id = ?
-       ORDER BY a.created_at DESC`,
+      `${this.listSelect()} WHERE p.workspace_id = ?
+       ORDER BY a.created_at DESC, a.id DESC`,
       [workspaceId],
     );
     return rows.map((row) => this.map(row));
@@ -715,6 +715,39 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
 
   private baseSelect() {
     return `SELECT a.*, p.name AS project_name
+            FROM analysis_task a
+            JOIN project p ON p.id = a.project_id`;
+  }
+
+  /**
+   * 列表轮询只读取状态和进度字段。
+   *
+   * change_evidence、symbol_impacts、regression_suggestions 等 JSON 可能达到数 MB；
+   * 若使用 SELECT a.* 再按 created_at 排序，MySQL 会把这些大字段带入排序临时表，
+   * 最终触发 Out of sort memory。完整结果由详情接口按任务 ID 单独读取。
+   */
+  private listSelect() {
+    return `SELECT
+              a.id, a.project_id, p.name AS project_name,
+              a.base_commit, a.target_commit, a.status,
+              a.commit_count, a.changed_file_count, a.additions, a.deletions,
+              a.error_message, a.risk_level, a.risk_summary,
+              a.ai_analysis_requested, a.created_at, a.finished_at,
+              a.attempt_count, a.max_attempts, a.next_attempt_at,
+              a.progress_stage, a.progress_percent, a.progress_message,
+              a.progress_updated_at, a.started_at,
+              a.ai_attempt_count, a.ai_max_attempts, a.ai_next_attempt_at,
+              CASE WHEN a.ai_analysis IS NULL THEN NULL ELSE JSON_OBJECT(
+                'status', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.status')),
+                'summary', NULL,
+                'riskLevel', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.riskLevel')),
+                'keyFindings', JSON_ARRAY(),
+                'regressionSuggestions', JSON_ARRAY(),
+                'model', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.model')),
+                'analyzedAt', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.analyzedAt')),
+                'errorMessage', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.errorMessage')),
+                'tokenUsage', JSON_EXTRACT(a.ai_analysis, '$.tokenUsage')
+              ) END AS ai_analysis
             FROM analysis_task a
             JOIN project p ON p.id = a.project_id`;
   }

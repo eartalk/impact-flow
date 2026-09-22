@@ -73,7 +73,7 @@ const {
       <div class="auth-story-copy">
         <small>RELEASE INTELLIGENCE</small>
         <h1>让每一次变更<br />都有清晰的影响边界</h1>
-        <p>持续巡检生产分支，串联代码影响、调用链与 AI 回归建议。</p>
+        <p>持续巡检生产分支，串联代码影响、调用链与回归范围。</p>
       </div>
       <div class="auth-signal" aria-hidden="true">
         <span></span><span></span><span></span><span></span>

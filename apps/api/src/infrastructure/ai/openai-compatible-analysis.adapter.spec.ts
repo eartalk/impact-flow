@@ -33,6 +33,14 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
                 title: '用户详情接口回归',
                 scope: '验证正常、无权限和用户不存在场景。',
                 priority: 'P0',
+                targetType: 'API',
+                impactRelation: 'UPSTREAM',
+                coverageStatus: 'CONFIRMED',
+                businessDomain: '用户管理',
+                businessScenario: '用户详情查询',
+                boundaryType: 'HTTP',
+                technicalConfidence: 'HIGH',
+                businessConfidence: 'HIGH',
                 entryPoints: ['GET /users/:id'],
                 scenarios: ['正常查询', '无权限访问'],
                 steps: ['请求用户详情接口'],
@@ -59,6 +67,14 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
           entryPoints: ['GET /users/:id'],
           evidence: ['src/users.controller.ts: UserController.detail'],
           confidence: 'HIGH',
+          targetType: 'API',
+          impactRelation: 'UPSTREAM',
+          coverageStatus: 'CONFIRMED',
+          businessDomain: '用户管理',
+          businessScenario: '用户详情查询',
+          boundaryType: 'HTTP',
+          technicalConfidence: 'HIGH',
+          businessConfidence: 'HIGH',
         })],
       }),
     );
@@ -79,7 +95,8 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
     expect(request.thinking).toEqual({ type: 'disabled' });
     expect(request.messages[0]?.content).toContain('第一个字符必须是 {');
     expect(request.messages[0]?.content).toContain('keyFindings 最多 6 项');
-    expect(request.messages[0]?.content).toContain('每项必须给出可执行场景');
+    expect(request.messages[0]?.content).toContain('不是测试用例');
+    expect(request.messages[0]?.content).toContain('不能静默遗漏');
   });
 
   it('rejects invalid model JSON so the application can degrade gracefully', async () => {
