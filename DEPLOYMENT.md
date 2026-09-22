@@ -1,5 +1,9 @@
 # Production deployment
 
+Production uses the existing `my-mysql` container as its database. The deploy
+script connects that container to the external `impact-flow-backend` network;
+the application Compose project does not create a second MySQL container.
+
 Production is deployed from the `main` branch of:
 
 ```text

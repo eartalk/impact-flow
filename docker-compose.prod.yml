@@ -1,29 +1,6 @@
 name: impact-flow
 
 services:
-  mysql:
-    image: mysql:8.4
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-impact_flow}
-      MYSQL_USER: ${MYSQL_USER:-impact_flow}
-      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
-      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
-      TZ: Asia/Shanghai
-    volumes:
-      - mysql-data:/var/lib/mysql
-      - ./database/impact_flow_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
-      - ./secrets/mysql_password:/run/secrets/mysql_password:ro
-      - ./secrets/mysql_root_password:/run/secrets/mysql_root_password:ro
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$${MYSQL_USER} --password=$$(cat /run/secrets/mysql_password) --silent"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 20s
-    networks:
-      - backend
-
   repository-init:
     image: busybox:1.36.1
     restart: "no"
@@ -43,7 +20,7 @@ services:
     environment:
       NODE_ENV: production
       API_PORT: 3012
-      DATABASE_HOST: mysql
+      DATABASE_HOST: my-mysql
       DATABASE_PORT: 3306
       DATABASE_NAME: ${MYSQL_DATABASE:-impact_flow}
       DATABASE_USER: ${MYSQL_USER:-impact_flow}
@@ -55,8 +32,6 @@ services:
       - ./secrets/mysql_password:/run/secrets/mysql_password:ro
       - ${HOME}/.ssh:/home/node/.ssh:ro
     depends_on:
-      mysql:
-        condition: service_healthy
       repository-init:
         condition: service_completed_successfully
     healthcheck:
@@ -88,9 +63,9 @@ services:
       - backend
 
 volumes:
-  mysql-data:
   repository-cache:
 
 networks:
   backend:
-    driver: bridge
+    external: true
+    name: impact-flow-backend

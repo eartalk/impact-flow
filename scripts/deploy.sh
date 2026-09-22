@@ -8,9 +8,19 @@ APP_PORT="${APP_PORT:-80}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-http://localhost:${APP_PORT}}"
 ENV_FILE="$PROJECT_DIR/.env"
 SECRETS_DIR="$PROJECT_DIR/secrets"
+DATABASE_CONTAINER="${DATABASE_CONTAINER:-my-mysql}"
+BACKEND_NETWORK="${BACKEND_NETWORK:-impact-flow-backend}"
 
 command -v docker >/dev/null 2>&1 || { echo "错误: 未安装 Docker" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "错误: 未安装 Docker Compose" >&2; exit 1; }
+docker inspect "$DATABASE_CONTAINER" >/dev/null 2>&1 || {
+  echo "错误: 数据库容器不存在: $DATABASE_CONTAINER" >&2
+  exit 1
+}
+docker network inspect "$BACKEND_NETWORK" >/dev/null 2>&1 || docker network create "$BACKEND_NETWORK" >/dev/null
+if ! docker inspect --format '{{json .NetworkSettings.Networks}}' "$DATABASE_CONTAINER" | grep -q "\"$BACKEND_NETWORK\""; then
+  docker network connect "$BACKEND_NETWORK" "$DATABASE_CONTAINER"
+fi
 
 mkdir -p "$SECRETS_DIR"
 chmod 700 "$SECRETS_DIR"
