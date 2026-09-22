@@ -178,6 +178,8 @@ export class ProjectsService {
         productionBranch: project.productionBranch,
         lastAnalyzedCommit: project.lastAnalyzedCommit,
       });
+      // listCommits 仅返回生产分支第一父链上的 Merge Commit。
+      // 字段名 pendingCommits 为数据库和API历史兼容保留，业务含义为“待检测合并”。
       const pendingCommits = await this.git.listCommits({
         projectId: project.id,
         repositoryUrl: project.repositoryUrl,

@@ -1,8 +1,50 @@
 import { ConfigService } from '@nestjs/config';
 import type { ChangeEvidence, ChangedFile } from '@impact-flow/contracts';
+import simpleGit from 'simple-git';
 import { SimpleGitGateway } from './simple-git.gateway';
 
+jest.mock('simple-git', () => ({
+  __esModule: true,
+  default: jest.fn(),
+}));
+
 describe('SimpleGitGateway change evidence', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('lists only first-parent merge commits for the interval merge count', async () => {
+    const raw = jest.fn().mockResolvedValue(
+      'abcdef1234567890\x1fabcdef1\x1ftester\x1f2026-09-22T00:00:00.000Z\x1fMerge branch feature/camera\n',
+    );
+    (simpleGit as unknown as jest.Mock).mockReturnValue({ raw });
+    const gateway = new SimpleGitGateway(new ConfigService({
+      REPOSITORY_CACHE_DIR: 'E:/repositories',
+    }));
+
+    const commits = await gateway.listCommits({
+      projectId: 'project-1',
+      repositoryUrl: 'git@example.com:delivery/worksite.git',
+      productionBranch: 'production',
+      baseCommit: 'base123',
+      targetCommit: 'target456',
+    });
+
+    expect(raw).toHaveBeenCalledWith([
+      'log',
+      '--first-parent',
+      '--merges',
+      '--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s',
+      'base123..target456',
+    ]);
+    expect(commits).toEqual([
+      expect.objectContaining({
+        shortSha: 'abcdef1',
+        subject: 'Merge branch feature/camera',
+      }),
+    ]);
+  });
+
   it('extracts bounded diff hunks and redacts sensitive assignments', () => {
     const gateway = new SimpleGitGateway(new ConfigService({}));
     const files: ChangedFile[] = [{

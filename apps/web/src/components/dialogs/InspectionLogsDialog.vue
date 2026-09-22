@@ -100,7 +100,7 @@ const { projects, loading, inspectionLogVisible, inspectionLogLoading, inspectio
                 <i></i>
                 {{
                   log.status === "SUCCESS"
-                    ? `成功 · ${log.pendingCommitCount} 个待分析`
+                    ? `成功 · ${log.pendingCommitCount} 个待检测合并`
                     : log.status === "FAILED"
                       ? "失败"
                       : "执行中"

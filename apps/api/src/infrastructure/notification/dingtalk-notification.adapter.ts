@@ -18,7 +18,7 @@ export class DingTalkNotificationAdapter implements NotificationGateway {
       input.projectName +
       ' 分支: ' +
       input.branch +
-      ' 待检测提交: ' +
+      ' 待检测合并: ' +
       input.commits.length +
       '个';
 

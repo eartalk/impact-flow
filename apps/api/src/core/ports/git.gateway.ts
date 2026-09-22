@@ -17,6 +17,10 @@ export interface GitGateway {
     baseSource: 'LAST_ANALYSIS' | 'FIRST_PARENT';
   }>;
 
+  /**
+   * 返回生产分支区间内第一父链上的合并提交，用于展示“待检测合并”和间隔合并次数。
+   * 变更分析本身仍由 analyzeRange 返回完整提交范围。
+   */
   listCommits(input: {
     projectId: string;
     repositoryUrl: string;

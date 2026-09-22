@@ -277,7 +277,7 @@ const { loading, aiConfigs, aiConfigLoading, testingAiConfigId, aiConnectionResu
               <div>
                 <h2>待检测通知</h2>
                 <p>
-                  巡检发现服务存在新的待检测提交时发送钉钉通知；同一服务的同一提交只通知一次。
+                  巡检发现服务存在新的待检测合并时发送钉钉通知；同一服务的同一目标版本只通知一次。
                 </p>
               </div>
             </header>

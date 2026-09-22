@@ -41,7 +41,7 @@ describe('DingTalkNotificationAdapter', () => {
       msgtype: 'text',
       text: {
         content:
-          '[通知] 服务: 订单服务 分支: production 待检测提交: 1个',
+          '[通知] 服务: 订单服务 分支: production 待检测合并: 1个',
       },
     });
   });

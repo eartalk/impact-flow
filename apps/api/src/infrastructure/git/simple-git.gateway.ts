@@ -125,6 +125,8 @@ export class SimpleGitGateway implements GitGateway {
     const git = simpleGit(this.repositoryPath(input.projectId));
     const output = await git.raw([
       'log',
+      '--first-parent',
+      '--merges',
       '--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s',
       `${input.baseCommit}..${input.targetCommit}`,
     ]);
