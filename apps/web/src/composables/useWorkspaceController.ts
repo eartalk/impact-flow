@@ -1478,6 +1478,21 @@ async function pollActiveAnalyses() {
     );
     const next = await api.listAnalyses();
     analyses.value = next;
+    for (const task of next) {
+      if (
+        expandedProjectIds.value.includes(task.projectId) &&
+        (["READY", "RUNNING"].includes(task.status) ||
+          task.aiAnalysis?.status === "RUNNING")
+      ) {
+        analysisDetails.value = {
+          ...analysisDetails.value,
+          [task.projectId]: {
+            ...analysisDetails.value[task.projectId],
+            ...task,
+          },
+        };
+      }
+    }
     const completed = next.filter((task) => {
       const old = previous.get(task.id);
       return (

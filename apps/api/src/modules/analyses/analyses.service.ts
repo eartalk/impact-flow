@@ -31,7 +31,6 @@ import {
 @Injectable()
 export class AnalysesService {
   private readonly logger = new Logger(AnalysesService.name);
-  private readonly aiRunning = new Set<string>();
   private readonly impactAnalyzer = new ChangeImpactAnalyzer();
 
   constructor(
@@ -48,19 +47,6 @@ export class AnalysesService {
     @Inject(AI_ANALYZER_GATEWAY)
     private readonly aiAnalyzer: AiAnalyzerGateway,
   ) {}
-
-  async recoverPendingAiTasks() {
-    const pendingAi = await this.analyses.findPendingAiForWorker();
-    for (const task of pendingAi) this.enqueueAi(task.id);
-    if (pendingAi.length) {
-      this.logger.log(`已恢复 ${pendingAi.length} 个未完成 AI 分析任务`);
-    }
-    const requestedAi = await this.analyses.findRequestedAiForWorker();
-    for (const task of requestedAi) await this.queueAiAnalysis(task.id);
-    if (requestedAi.length) {
-      this.logger.log(`已恢复 ${requestedAi.length} 个待启动 AI 分析任务`);
-    }
-  }
 
   list(workspaceId: string) {
     return this.analyses.findAll(workspaceId);
@@ -187,7 +173,7 @@ export class AnalysesService {
   private async queueAiAnalysis(id: string) {
     const task = await this.analyses.findByIdForWorkerTask(id);
     if (!task) return null;
-    if (task.aiAnalysis?.status === 'RUNNING' || this.aiRunning.has(id)) {
+    if (task.aiAnalysis?.status === 'RUNNING') {
       return task;
     }
 
@@ -201,21 +187,12 @@ export class AnalysesService {
       analyzedAt: null,
       errorMessage: null,
     });
-    this.enqueueAi(id);
     return pending;
   }
 
   private enqueue(taskId: string) {
     // 基础分析由持久化 Worker 轮询并原子抢占；保留入口便于旧调用方兼容。
     void taskId;
-  }
-
-  private enqueueAi(taskId: string) {
-    if (this.aiRunning.has(taskId)) return;
-    this.aiRunning.add(taskId);
-    setImmediate(() => {
-      void this.processAi(taskId).finally(() => this.aiRunning.delete(taskId));
-    });
   }
 
   private process(taskId: string) {
@@ -237,16 +214,27 @@ export class AnalysesService {
 
     if (!workerId) await this.analyses.markRunning(taskId);
     try {
+      await this.updateProgress(task.id, 'SYNCING_REPOSITORY', 15, '正在同步远程代码仓库', workerId);
       const result = await this.git.analyzeRange({
         projectId: project.id,
         repositoryUrl: project.repositoryUrl,
         productionBranch: project.productionBranch,
         baseCommit: task.baseCommit,
         targetCommit: task.targetCommit,
+        onRepositoryReady: () =>
+          this.updateProgress(
+            task.id,
+            'CALCULATING_DIFF',
+            35,
+            '代码仓库已就绪，正在计算版本差异',
+            workerId,
+          ),
       });
+      await this.updateProgress(task.id, 'ANALYZING_IMPACT', 55, '正在评估变更影响与回归范围', workerId);
       const impact = this.impactAnalyzer.analyze(result);
       let symbolAnalysis;
       try {
+        await this.updateProgress(task.id, 'ANALYZING_SYMBOLS', 75, '正在分析 Symbol 变更与调用链', workerId);
         // 关联仓库必须限定在与被分析项目相同的工作空间内，
         // 否则会把其他工作空间的服务名与提交纳入本空间的分析结果
         const relatedRepositories = (await this.projects.findAll(project.workspaceId))
@@ -272,6 +260,7 @@ export class AnalysesService {
           symbolImpacts: [],
         };
       }
+      await this.updateProgress(task.id, 'SAVING_RESULT', 90, '分析已完成，正在保存结果', workerId);
       const completed = await this.analyses.complete(task.id, {
         ...result,
         ...impact,
@@ -299,63 +288,53 @@ export class AnalysesService {
     }
   }
 
-  private async processAi(taskId: string) {
+  async processClaimedAi(taskId: string, workerId: string) {
     const task = await this.analyses.findByIdForWorkerTask(taskId);
     if (!task || task.status !== 'SUCCESS' || task.aiAnalysis?.status !== 'RUNNING') {
       return;
     }
     const project = await this.projects.findByIdForWorkerTask(task.projectId);
-    if (!project) {
-      await this.failAi(taskId, '项目不存在或已被删除');
-      return;
-    }
+    if (!project) throw new Error('项目不存在或已被删除');
     if (!task.riskLevel || !task.riskSummary) {
-      await this.failAi(taskId, '变更分析结果不完整，无法执行 AI 分析');
-      return;
+      throw new Error('变更分析结果不完整，无法执行 AI 分析');
     }
-
-    try {
-      const result = await this.aiAnalyzer.analyze({
-        workspaceId: project.workspaceId,
-        projectName: project.name,
-        baseCommit: task.baseCommit,
-        targetCommit: task.targetCommit,
-        commits: task.commits ?? [],
-        files: task.files ?? [],
-        additions: task.additions,
-        deletions: task.deletions,
-        changeEvidence: task.changeEvidence ?? [],
-        ruleAnalysis: {
-          riskLevel: task.riskLevel,
-          riskSummary: task.riskSummary,
-          impactedModules: task.impactedModules ?? [],
-          regressionSuggestions: task.regressionSuggestions ?? [],
-        },
-        symbolAnalysis: {
-          symbolSummary: task.symbolSummary ?? '未生成 TypeScript Symbol 分析摘要',
-          symbolChanges: task.symbolChanges ?? [],
-          symbolImpacts: task.symbolImpacts ?? [],
-        },
-      });
-      await this.analyses.finishAiAnalysis(taskId, result);
-      this.logger.log(`AI 分析任务 ${taskId} 执行完成`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.failAi(taskId, message);
-      this.logger.warn(`AI 分析任务 ${taskId} 执行失败：${message}`);
-    }
+    const result = await this.aiAnalyzer.analyze({
+      workspaceId: project.workspaceId,
+      projectName: project.name,
+      baseCommit: task.baseCommit,
+      targetCommit: task.targetCommit,
+      commits: task.commits ?? [],
+      files: task.files ?? [],
+      additions: task.additions,
+      deletions: task.deletions,
+      changeEvidence: task.changeEvidence ?? [],
+      ruleAnalysis: {
+        riskLevel: task.riskLevel,
+        riskSummary: task.riskSummary,
+        impactedModules: task.impactedModules ?? [],
+        regressionSuggestions: task.regressionSuggestions ?? [],
+      },
+      symbolAnalysis: {
+        symbolSummary: task.symbolSummary ?? '未生成 TypeScript Symbol 分析摘要',
+        symbolChanges: task.symbolChanges ?? [],
+        symbolImpacts: task.symbolImpacts ?? [],
+      },
+    });
+    await this.analyses.finishAiAnalysis(taskId, result, workerId);
+    this.logger.log(`AI 分析任务 ${taskId} 执行完成`);
   }
 
-  private async failAi(taskId: string, message: string) {
-    await this.analyses.finishAiAnalysis(taskId, {
-      status: 'FAILED',
-      summary: null,
-      riskLevel: null,
-      keyFindings: [],
-      regressionSuggestions: [],
-      model: null,
-      analyzedAt: new Date().toISOString(),
-      errorMessage: message.slice(0, 1000),
-    });
+  private async updateProgress(
+    taskId: string,
+    stage: NonNullable<import('@impact-flow/contracts').AnalysisTask['progressStage']>,
+    percent: number,
+    message: string,
+    workerId?: string,
+  ) {
+    await this.analyses.updateProgress?.(
+      taskId,
+      { stage, percent, message },
+      workerId,
+    );
   }
 }

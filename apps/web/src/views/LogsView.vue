@@ -90,12 +90,14 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
           >
             <div
               class="analysis-log-row analysis-log-head"
-              :class="{ 'is-ai': logsTab === 'AI_ANALYSIS' }"
+              :class="{ 'is-ai': logsTab === 'AI_ANALYSIS', 'is-change': logsTab === 'CHANGE_ANALYSIS' }"
             >
               <span>开始时间</span>
               <span>服务</span>
               <span>版本区间</span>
+              <span v-if="logsTab === 'AI_ANALYSIS'">尝试</span>
               <span>结果</span>
+              <span v-if="logsTab === 'CHANGE_ANALYSIS'">执行次数</span>
               <span v-if="logsTab === 'AI_ANALYSIS'">模型</span>
               <span v-if="logsTab === 'AI_ANALYSIS'">Token</span>
               <span>耗时</span>
@@ -106,7 +108,7 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
                 v-for="log in analysisLogs"
                 :key="log.id"
                 class="analysis-log-row"
-                :class="{ 'is-ai': logsTab === 'AI_ANALYSIS' }"
+                :class="{ 'is-ai': logsTab === 'AI_ANALYSIS', 'is-change': logsTab === 'CHANGE_ANALYSIS' }"
               >
                 <time>{{ formatLogTime(log.startedAt) }}</time>
                 <span class="analysis-log-project" :title="log.projectName">
@@ -121,6 +123,9 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
                     shortCommit(log.targetCommit)
                   }}</code>
                 </div>
+                <span v-if="logsTab === 'AI_ANALYSIS'" class="analysis-log-attempt">
+                  第 {{ log.attempt ?? 1 }} 次
+                </span>
                 <el-tooltip
                   placement="top"
                   :disabled="!log.errorMessage"
@@ -130,6 +135,9 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
                     <i></i>{{ analysisLogStatusLabel(log.status) }}
                   </span>
                 </el-tooltip>
+                <span v-if="logsTab === 'CHANGE_ANALYSIS'" class="analysis-log-attempt">
+                  {{ log.attemptCount ?? "—" }}/{{ log.maxAttempts ?? "—" }}
+                </span>
                 <code
                   v-if="logsTab === 'AI_ANALYSIS'"
                   class="analysis-log-model"

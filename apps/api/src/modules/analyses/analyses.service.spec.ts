@@ -96,16 +96,11 @@ describe('AnalysesService', () => {
       {} as never,
       {} as never,
     );
-    const enqueueAi = jest
-      .spyOn(service as unknown as { enqueueAi(id: string): void }, 'enqueueAi')
-      .mockImplementation(() => undefined);
-
     await expect(service.analyzeWithAi(source.id, 'workspace-1')).resolves.toBe(pending);
     expect(analyses.startAiAnalysis).toHaveBeenCalledWith(
       source.id,
       expect.objectContaining({ status: 'RUNNING' }),
     );
-    expect(enqueueAi).toHaveBeenCalledWith(source.id);
   });
 
   it('does not invoke AI while processing a smart detection', async () => {
@@ -113,6 +108,7 @@ describe('AnalysesService', () => {
     const analyses = {
       findByIdForWorkerTask: jest.fn().mockResolvedValue(source),
       markRunning: jest.fn(),
+      updateProgress: jest.fn(),
       complete: jest.fn().mockResolvedValue(analysisTask()),
       fail: jest.fn(),
     };
@@ -161,6 +157,12 @@ describe('AnalysesService', () => {
     await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
 
     expect(analyses.complete).toHaveBeenCalled();
+    expect(analyses.updateProgress.mock.calls.map((call) => call[1].stage)).toEqual([
+      'SYNCING_REPOSITORY',
+      'ANALYZING_IMPACT',
+      'ANALYZING_SYMBOLS',
+      'SAVING_RESULT',
+    ]);
     expect(aiAnalyzer.analyze).not.toHaveBeenCalled();
   });
 
@@ -238,17 +240,12 @@ describe('AnalysesService', () => {
       symbols as never,
       {} as never,
     );
-    const enqueueAi = jest
-      .spyOn(service as unknown as { enqueueAi(id: string): void }, 'enqueueAi')
-      .mockImplementation(() => undefined);
-
     await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
 
     expect(analyses.startAiAnalysis).toHaveBeenCalledWith(
       source.id,
       expect.objectContaining({ status: 'RUNNING' }),
     );
-    expect(enqueueAi).toHaveBeenCalledWith(source.id);
   });
 
   it('only treats projects of the same workspace as related repositories', async () => {

@@ -63,7 +63,7 @@ DATABASE_PASSWORD_BASE64=base64-encoded-admin-password
 DATABASE_PASSWORD_FILE=/run/secrets/mysql-root-password
 ```
 
-数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/020_add_analysis_worker_reliability.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段；迁移 017 会回填工作空间所有者与用户默认空间，并在工作空间成员表上建立单所有者约束，执行前同样建议先备份；迁移 018 只是把分析任务状态列的注释补上 `CANCELLED`（列类型本就是 varchar，无需改表）；迁移 019 是已经停用的邀请功能历史脚本，仅为兼容已执行过该迁移的环境而保留，新环境无需执行；迁移 020 增加 Worker 租约、重试次数和下次执行时间字段。
+数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/022_add_ai_worker_reliability.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段；迁移 017 会回填工作空间所有者与用户默认空间，并在工作空间成员表上建立单所有者约束，执行前同样建议先备份；迁移 018 只是把分析任务状态列的注释补上 `CANCELLED`（列类型本就是 varchar，无需改表）；迁移 019 是已经停用的邀请功能历史脚本，仅为兼容已执行过该迁移的环境而保留，新环境无需执行；迁移 020 增加 Worker 租约、重试次数和下次执行时间字段；迁移 021 增加可持久化的执行阶段、阶段进度、说明和开始时间字段；迁移 022 为 AI 分析增加独立租约、重试和逐次执行日志字段。
 
 增量脚本需要按序号手工执行，且**必须显式指定连接字符集**，否则中文表名注释与列注释会被写成乱码（Windows 下 mysql 客户端默认不是 utf8mb4）：
 
@@ -73,12 +73,16 @@ mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/016_add_work
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/017_add_workspace_management.sql
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/018_add_analysis_cancelled_status.sql
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/020_add_analysis_worker_reliability.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/021_add_analysis_task_progress.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/022_add_ai_worker_reliability.sql
 ```
 
 也可以使用读取项目 `.env` 且不会在命令行暴露密码的迁移命令：
 
 ```bash
 pnpm --filter @impact-flow/api migrate 020_add_analysis_worker_reliability.sql
+pnpm --filter @impact-flow/api migrate 021_add_analysis_task_progress.sql
+pnpm --filter @impact-flow/api migrate 022_add_ai_worker_reliability.sql
 ```
 
 迁移 017 执行前会校验每个工作空间恰好有一个 OWNER，若存在「无 OWNER」或「多 OWNER」的异常数据会直接中止并提示人工修复，不会写入半成品结构。

@@ -31,6 +31,7 @@ export interface GitGateway {
     productionBranch: string;
     baseCommit: string;
     targetCommit: string;
+    onRepositoryReady?: () => Promise<void>;
   }): Promise<{
     commits: import('@impact-flow/contracts').CommitSummary[];
     files: import('@impact-flow/contracts').ChangedFile[];

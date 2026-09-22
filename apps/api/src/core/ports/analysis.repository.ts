@@ -30,6 +30,7 @@ export interface AnalysisRepository {
   findByIdForWorkerTask(id: string): Promise<AnalysisTask | null>;
   /** 原子抢占一条到期任务；支持多实例 SKIP LOCKED 与过期租约恢复。 */
   claimNextForWorker(workerId: string, leaseMs: number): Promise<AnalysisTask | null>;
+  claimNextAiForWorker(workerId: string, leaseMs: number): Promise<AnalysisTask | null>;
   /** 失败后重新排队；达到最大次数时转为最终 FAILED。 */
   retryOrFail(
     id: string,
@@ -37,6 +38,21 @@ export interface AnalysisRepository {
     errorMessage: string,
     nextAttemptAt: Date,
   ): Promise<'RETRY' | 'FAILED'>;
+  retryOrFailAi(
+    id: string,
+    workerId: string,
+    errorMessage: string,
+    nextAttemptAt: Date,
+  ): Promise<'RETRY' | 'FAILED'>;
+  updateProgress?(
+    id: string,
+    progress: {
+      stage: NonNullable<AnalysisTask['progressStage']>;
+      percent: number;
+      message: string;
+    },
+    workerId?: string,
+  ): Promise<void>;
   findActiveByProject(
     projectId: string,
     workspaceId: string,
@@ -63,6 +79,6 @@ export interface AnalysisRepository {
     workerId?: string,
   ): Promise<AnalysisTask>;
   startAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask>;
-  finishAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask>;
+  finishAiAnalysis(id: string, result: AiAnalysisResult, workerId?: string): Promise<AnalysisTask>;
   fail(id: string, errorMessage: string): Promise<AnalysisTask>;
 }

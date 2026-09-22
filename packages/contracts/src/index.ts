@@ -7,6 +7,15 @@ export type AnalysisStatus =
   /** 工作空间归档时，尚未运行的 READY 任务会被置为已取消 */
   | 'CANCELLED';
 
+export type AnalysisProgressStage =
+  | 'QUEUED'
+  | 'SYNCING_REPOSITORY'
+  | 'CALCULATING_DIFF'
+  | 'ANALYZING_IMPACT'
+  | 'ANALYZING_SYMBOLS'
+  | 'SAVING_RESULT'
+  | 'COMPLETED';
+
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 export interface ImpactModule {
@@ -317,6 +326,14 @@ export interface AnalysisTask {
   attemptCount?: number;
   maxAttempts?: number;
   nextAttemptAt?: string | null;
+  progressStage?: AnalysisProgressStage;
+  progressPercent?: number;
+  progressMessage?: string | null;
+  progressUpdatedAt?: string | null;
+  startedAt?: string | null;
+  aiAttemptCount?: number;
+  aiMaxAttempts?: number;
+  aiNextAttemptAt?: string | null;
 }
 
 export type AnalysisLogType = 'CHANGE_ANALYSIS' | 'AI_ANALYSIS';
@@ -338,6 +355,10 @@ export interface AnalysisExecutionLog {
   startedAt: string;
   finishedAt: string | null;
   durationMs: number | null;
+  attemptCount?: number;
+  maxAttempts?: number;
+  progressStage?: AnalysisProgressStage;
+  attempt?: number;
 }
 
 export interface AnalysisLogQuery {

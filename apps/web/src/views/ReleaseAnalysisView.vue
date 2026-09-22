@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ArrowDown, ArrowRight, ArrowUp, DataAnalysis, Refresh, Tickets } from "@element-plus/icons-vue";
 import { useWorkspaceContext } from "../workspace-context";
+import AnalysisTaskProgress from "../components/analysis/AnalysisTaskProgress.vue";
 
 const { projects, loading, detectingProjectId, rerunningProjectId, startingAiProjectId, detailLoadingProjectId, checkingAll, shortCommit, formatCheckedAt, openCreateProject, analysisFor, analysisIsActive, aiAnalysisIsActive, analysisStatusLabel, riskLabel, confidenceLabel, symbolKindLabel, symbolChangeLabel, analysisDetail, isExpanded, isDetailSectionExpanded, toggleDetailSection, toggleAnalysis, currentVersion, previousVersion, intervalVersions, pushState, openProjectAnalysisLogs, openInspectionLogs, inspectAllProjects, startDetection, rerunAnalysis, startAiAnalysis } = useWorkspaceContext();
 </script>
@@ -47,6 +48,7 @@ const { projects, loading, detectingProjectId, rerunningProjectId, startingAiPro
             <span>上一分析版本号</span>
             <span>间隔版本</span>
             <span>是否存在新推送</span>
+            <span>分析状态</span>
             <span>操作</span>
           </div>
 
@@ -130,6 +132,12 @@ const { projects, loading, detectingProjectId, rerunningProjectId, startingAiPro
                     {{ formatCheckedAt(project.lastCheckedAt) }}
                   </small>
                 </div>
+                <AnalysisTaskProgress
+                  v-if="analysisFor(project.id)"
+                  :task="analysisFor(project.id)!"
+                  compact
+                />
+                <span v-else class="analysis-status-empty">尚未分析</span>
                 <div class="release-actions">
                   <button
                     class="detect-action"
@@ -236,27 +244,10 @@ const { projects, loading, detectingProjectId, rerunningProjectId, startingAiPro
                   </div>
                 </div>
 
-                <div
-                  v-if="
-                    ['READY', 'RUNNING'].includes(
-                      analysisDetail(project.id)?.status ?? '',
-                    )
-                  "
-                  class="analysis-running-state"
-                >
-                  <span class="analysis-running-indicator"></span>
-                  <div>
-                    <strong>后台正在执行变更分析</strong>
-                    <p>页面可以继续操作，结果完成后会自动更新。</p>
-                  </div>
-                </div>
-
-                <div
-                  v-else-if="analysisDetail(project.id)?.status === 'FAILED'"
-                  class="analysis-error"
-                >
-                  {{ analysisDetail(project.id)?.errorMessage }}
-                </div>
+                <AnalysisTaskProgress
+                  v-if="['READY', 'RUNNING', 'FAILED'].includes(analysisDetail(project.id)?.status ?? '')"
+                  :task="analysisDetail(project.id)!"
+                />
 
                 <template v-else>
                   <div class="result-metrics">
@@ -389,8 +380,22 @@ const { projects, loading, detectingProjectId, rerunningProjectId, startingAiPro
                     >
                       <span class="analysis-running-indicator"></span>
                       <div>
-                        <strong>AI 正在分析变更分析结果</strong>
-                        <p>只调用 AI，不会重新拉取 Git 或执行 Symbol 分析。</p>
+                        <strong>
+                          {{ analysisDetail(project.id)?.aiNextAttemptAt ? "AI 分析等待自动重试" : "AI 正在分析变更分析结果" }}
+                        </strong>
+                        <p>
+                          第 {{ Math.max(1, analysisDetail(project.id)?.aiAttemptCount ?? 0) }} / {{ analysisDetail(project.id)?.aiMaxAttempts ?? 3 }} 次执行
+                          <template v-if="analysisDetail(project.id)?.aiNextAttemptAt">
+                            · {{ formatCheckedAt(analysisDetail(project.id)?.aiNextAttemptAt ?? null) }} 重试
+                          </template>
+                        </p>
+                        <p
+                          v-if="analysisDetail(project.id)?.aiAnalysis?.errorMessage"
+                          class="ai-retry-error"
+                          role="alert"
+                        >
+                          上次失败：{{ analysisDetail(project.id)?.aiAnalysis?.errorMessage }}
+                        </p>
                       </div>
                     </div>
                     <div

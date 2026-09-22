@@ -43,6 +43,14 @@ type AnalysisRow = RowDataPacket & {
   attempt_count: number;
   max_attempts: number;
   next_attempt_at: string | null;
+  progress_stage: NonNullable<AnalysisTask['progressStage']>;
+  progress_percent: number;
+  progress_message: string | null;
+  progress_updated_at: string | null;
+  started_at: string | null;
+  ai_attempt_count: number;
+  ai_max_attempts: number;
+  ai_next_attempt_at: string | null;
 };
 
 type ChangeFileRow = RowDataPacket & {
@@ -69,6 +77,10 @@ type AnalysisLogRow = RowDataPacket & {
   started_at: string;
   finished_at: string | null;
   duration_ms: number | string | null;
+  attempt_count: number | null;
+  max_attempts: number | null;
+  progress_stage: AnalysisTask['progressStage'] | null;
+  attempt: number | null;
 };
 
 type CountRow = RowDataPacket & { total: number };
@@ -124,9 +136,75 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
          SET status = 'RUNNING', attempt_count = attempt_count + 1,
              worker_id = ?, locked_at = CURRENT_TIMESTAMP(3),
              lock_expires_at = ?,
-             error_message = NULL, finished_at = NULL
+             error_message = NULL, finished_at = NULL,
+             progress_stage = 'SYNCING_REPOSITORY', progress_percent = 15,
+             progress_message = '正在同步远程代码仓库',
+             progress_updated_at = CURRENT_TIMESTAMP(3),
+             started_at = COALESCE(started_at, CURRENT_TIMESTAMP(3))
          WHERE id = ?`,
         [workerId, new Date(Date.now() + leaseMs), id],
+      );
+      await connection.commit();
+      return this.findByIdInternal(id);
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async claimNextAiForWorker(workerId: string, leaseMs: number) {
+    const db = await this.database.connection();
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.query<(RowDataPacket & { id: string })[]>(
+        `SELECT a.id FROM analysis_task a
+         JOIN project p ON p.id = a.project_id
+         JOIN workspace w ON w.id = p.workspace_id
+         WHERE w.status = 'ACTIVE' AND a.status = 'SUCCESS'
+           AND a.ai_attempt_count < a.ai_max_attempts
+           AND (
+             (JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.status')) = 'RUNNING'
+               AND (a.ai_next_attempt_at IS NULL OR a.ai_next_attempt_at <= CURRENT_TIMESTAMP(3))
+               AND (a.ai_worker_id IS NULL OR a.ai_lock_expires_at < CURRENT_TIMESTAMP(3)))
+             OR (a.ai_analysis_requested = 1 AND a.ai_analysis IS NULL)
+           )
+         ORDER BY COALESCE(a.ai_next_attempt_at, a.created_at), a.created_at
+         LIMIT 1 FOR UPDATE SKIP LOCKED`,
+      );
+      const id = rows[0]?.id;
+      if (!id) {
+        await connection.commit();
+        return null;
+      }
+      await connection.execute(
+        `UPDATE analysis_task
+         SET ai_attempt_count = ai_attempt_count + 1,
+             ai_worker_id = ?, ai_locked_at = CURRENT_TIMESTAMP(3),
+             ai_lock_expires_at = ?, ai_next_attempt_at = NULL,
+             ai_analysis = JSON_OBJECT(
+               'status', 'RUNNING', 'summary', NULL, 'riskLevel', NULL,
+               'keyFindings', JSON_ARRAY(), 'regressionSuggestions', JSON_ARRAY(),
+               'model', NULL, 'analyzedAt', NULL, 'errorMessage', NULL
+             )
+         WHERE id = ?`,
+        [workerId, new Date(Date.now() + leaseMs), id],
+      );
+      await connection.execute(
+        `UPDATE ai_analysis_log
+         SET status = 'FAILED', error_message = '服务升级或重启后已由持久化 Worker 重新排队',
+             finished_at = CURRENT_TIMESTAMP(3)
+         WHERE analysis_task_id = ? AND status = 'RUNNING' AND worker_id IS NULL`,
+        [id],
+      );
+      await connection.execute(
+        `INSERT INTO ai_analysis_log
+         (id, analysis_task_id, project_id, status, attempt, worker_id)
+         SELECT ?, id, project_id, 'RUNNING', ai_attempt_count, ?
+         FROM analysis_task WHERE id = ?`,
+        [randomUUID(), workerId, id],
       );
       await connection.commit();
       return this.findByIdInternal(id);
@@ -157,18 +235,105 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       `UPDATE analysis_task
        SET status = ?, error_message = ?, next_attempt_at = ?,
            worker_id = NULL, locked_at = NULL, lock_expires_at = NULL,
-           finished_at = ?
+           finished_at = ?,
+           progress_stage = IF(?, 'QUEUED', progress_stage),
+           progress_percent = IF(?, 5, progress_percent),
+           progress_message = ?, progress_updated_at = CURRENT_TIMESTAMP(3)
        WHERE id = ? AND worker_id = ?`,
       [
         retry ? 'READY' : 'FAILED',
         errorMessage.slice(0, 2000),
         retry ? nextAttemptAt : null,
         retry ? null : new Date(),
+        retry,
+        retry,
+        retry ? '上次执行失败，等待自动重试' : '已达最大重试次数',
         id,
         workerId,
       ],
     );
     return retry ? 'RETRY' : 'FAILED';
+  }
+
+  async retryOrFailAi(
+    id: string,
+    workerId: string,
+    errorMessage: string,
+    nextAttemptAt: Date,
+  ): Promise<'RETRY' | 'FAILED'> {
+    const db = await this.database.connection();
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.query<
+        (RowDataPacket & { ai_attempt_count: number; ai_max_attempts: number })[]
+      >(
+        `SELECT ai_attempt_count, ai_max_attempts FROM analysis_task
+         WHERE id = ? AND ai_worker_id = ? LIMIT 1 FOR UPDATE`,
+        [id, workerId],
+      );
+      const row = rows[0];
+      if (!row) {
+        await connection.rollback();
+        return 'FAILED';
+      }
+      const retry = row.ai_attempt_count < row.ai_max_attempts;
+      const result: AiAnalysisResult = {
+        status: retry ? 'RUNNING' : 'FAILED',
+        summary: null,
+        riskLevel: null,
+        keyFindings: [],
+        regressionSuggestions: [],
+        model: null,
+        analyzedAt: retry ? null : new Date().toISOString(),
+        errorMessage: errorMessage.slice(0, 1000),
+      };
+      await connection.execute(
+        `UPDATE analysis_task
+         SET ai_analysis = ?, ai_next_attempt_at = ?, ai_worker_id = NULL,
+             ai_locked_at = NULL, ai_lock_expires_at = NULL
+         WHERE id = ? AND ai_worker_id = ?`,
+        [JSON.stringify(result), retry ? nextAttemptAt : null, id, workerId],
+      );
+      await connection.execute(
+        `UPDATE ai_analysis_log
+         SET status = 'FAILED', error_message = ?, finished_at = CURRENT_TIMESTAMP(3)
+         WHERE analysis_task_id = ? AND worker_id = ? AND status = 'RUNNING'`,
+        [errorMessage.slice(0, 2000), id, workerId],
+      );
+      await connection.commit();
+      return retry ? 'RETRY' : 'FAILED';
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async updateProgress(
+    id: string,
+    progress: {
+      stage: NonNullable<AnalysisTask['progressStage']>;
+      percent: number;
+      message: string;
+    },
+    workerId?: string,
+  ): Promise<void> {
+    const db = await this.database.connection();
+    await db.execute(
+      `UPDATE analysis_task
+       SET progress_stage = ?, progress_percent = ?, progress_message = ?,
+           progress_updated_at = CURRENT_TIMESTAMP(3)
+       WHERE id = ? ${workerId ? 'AND worker_id = ?' : ''}`,
+      [
+        progress.stage,
+        Math.max(0, Math.min(100, progress.percent)),
+        progress.message.slice(0, 500),
+        id,
+        ...(workerId ? [workerId] : []),
+      ],
+    );
   }
 
   private async findByIdInternal(
@@ -284,13 +449,16 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       ? `SELECT a.id, a.id AS analysis_id, a.project_id, p.name AS project_name,
                 'CHANGE_ANALYSIS' AS type, a.status, a.base_commit, a.target_commit,
                 NULL AS model, a.error_message, NULL AS token_usage,
-                a.created_at AS started_at, a.finished_at,
-                TIMESTAMPDIFF(MICROSECOND, a.created_at, a.finished_at) / 1000 AS duration_ms
+                a.attempt_count, a.max_attempts, a.progress_stage, NULL AS attempt,
+                COALESCE(a.started_at, a.created_at) AS started_at, a.finished_at,
+                TIMESTAMPDIFF(MICROSECOND, COALESCE(a.started_at, a.created_at), a.finished_at) / 1000 AS duration_ms
          ${from} ${where}
          ORDER BY a.created_at DESC LIMIT ? OFFSET ?`
       : `SELECT l.id, l.analysis_task_id AS analysis_id, l.project_id,
                 p.name AS project_name, 'AI_ANALYSIS' AS type, l.status,
                 a.base_commit, a.target_commit, l.model, l.error_message,
+                NULL AS attempt_count, NULL AS max_attempts, NULL AS progress_stage,
+                l.attempt,
                 l.token_usage, l.started_at, l.finished_at,
                 TIMESTAMPDIFF(MICROSECOND, l.started_at, l.finished_at) / 1000 AS duration_ms
          ${from} ${where}
@@ -359,7 +527,11 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
   async markRunning(id: string): Promise<AnalysisTask> {
     const db = await this.database.connection();
     await db.execute(
-      `UPDATE analysis_task SET status = 'RUNNING', error_message = NULL
+      `UPDATE analysis_task SET status = 'RUNNING', error_message = NULL,
+         progress_stage = 'SYNCING_REPOSITORY', progress_percent = 15,
+         progress_message = '正在同步远程代码仓库',
+         progress_updated_at = CURRENT_TIMESTAMP(3),
+         started_at = COALESCE(started_at, CURRENT_TIMESTAMP(3))
        WHERE id = ?`,
       [id],
     );
@@ -395,7 +567,9 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
              risk_summary = ?, impacted_modules = ?, regression_suggestions = ?,
              symbol_summary = ?, symbol_changes = ?, symbol_impacts = ?, change_evidence = ?,
              finished_at = CURRENT_TIMESTAMP(3), next_attempt_at = NULL,
-             worker_id = NULL, locked_at = NULL, lock_expires_at = NULL
+             worker_id = NULL, locked_at = NULL, lock_expires_at = NULL,
+             progress_stage = 'COMPLETED', progress_percent = 100,
+             progress_message = '分析结果已保存', progress_updated_at = CURRENT_TIMESTAMP(3)
          WHERE id = ? ${workerId ? 'AND worker_id = ?' : ''}`,
         [
           result.commits.length,
@@ -443,14 +617,12 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     try {
       await connection.beginTransaction();
       await connection.execute(
-        'UPDATE analysis_task SET ai_analysis = ? WHERE id = ?',
+        `UPDATE analysis_task
+         SET ai_analysis = ?, ai_analysis_requested = 1,
+             ai_attempt_count = 0, ai_next_attempt_at = NULL,
+             ai_worker_id = NULL, ai_locked_at = NULL, ai_lock_expires_at = NULL
+         WHERE id = ?`,
         [JSON.stringify(result), id],
-      );
-      await connection.execute(
-        `INSERT INTO ai_analysis_log
-         (id, analysis_task_id, project_id, status)
-         SELECT ?, id, project_id, 'RUNNING' FROM analysis_task WHERE id = ?`,
-        [randomUUID(), id],
       );
       await connection.commit();
       return (await this.findByIdInternal(id))!;
@@ -462,20 +634,31 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     }
   }
 
-  async finishAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask> {
+  async finishAiAnalysis(
+    id: string,
+    result: AiAnalysisResult,
+    workerId?: string,
+  ): Promise<AnalysisTask> {
     const db = await this.database.connection();
     const connection = await db.getConnection();
     try {
       await connection.beginTransaction();
-      await connection.execute(
-        'UPDATE analysis_task SET ai_analysis = ? WHERE id = ?',
-        [JSON.stringify(result), id],
+      const [updated] = await connection.execute(
+        `UPDATE analysis_task SET ai_analysis = ?, ai_next_attempt_at = NULL,
+           ai_worker_id = NULL, ai_locked_at = NULL, ai_lock_expires_at = NULL
+         WHERE id = ? ${workerId ? 'AND ai_worker_id = ?' : ''}`,
+        [JSON.stringify(result), id, ...(workerId ? [workerId] : [])],
       );
+      if (!('affectedRows' in updated) || updated.affectedRows === 0) {
+        await connection.rollback();
+        return (await this.findByIdInternal(id))!;
+      }
       await connection.execute(
         `UPDATE ai_analysis_log
          SET status = ?, model = ?, error_message = ?, token_usage = ?,
              finished_at = CURRENT_TIMESTAMP(3)
          WHERE analysis_task_id = ? AND status = 'RUNNING'
+           ${workerId ? 'AND worker_id = ?' : ''}
          ORDER BY started_at DESC LIMIT 1`,
         [
           result.status,
@@ -483,6 +666,7 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
           result.errorMessage,
           result.tokenUsage ? JSON.stringify(result.tokenUsage) : null,
           id,
+          ...(workerId ? [workerId] : []),
         ],
       );
       await connection.commit();
@@ -579,6 +763,18 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       nextAttemptAt: row.next_attempt_at
         ? mysqlDateTimeToIso(row.next_attempt_at)
         : null,
+      progressStage: row.progress_stage ?? 'QUEUED',
+      progressPercent: Number(row.progress_percent ?? 5),
+      progressMessage: row.progress_message,
+      progressUpdatedAt: row.progress_updated_at
+        ? mysqlDateTimeToIso(row.progress_updated_at)
+        : null,
+      startedAt: row.started_at ? mysqlDateTimeToIso(row.started_at) : null,
+      aiAttemptCount: Number(row.ai_attempt_count ?? 0),
+      aiMaxAttempts: Number(row.ai_max_attempts ?? 3),
+      aiNextAttemptAt: row.ai_next_attempt_at
+        ? mysqlDateTimeToIso(row.ai_next_attempt_at)
+        : null,
     };
   }
 
@@ -598,6 +794,10 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       startedAt: mysqlDateTimeToIso(row.started_at),
       finishedAt: row.finished_at ? mysqlDateTimeToIso(row.finished_at) : null,
       durationMs: row.duration_ms === null ? null : Number(row.duration_ms),
+      attemptCount: row.attempt_count === null ? undefined : Number(row.attempt_count),
+      maxAttempts: row.max_attempts === null ? undefined : Number(row.max_attempts),
+      progressStage: row.progress_stage ?? undefined,
+      attempt: row.attempt === null ? undefined : Number(row.attempt),
     };
   }
 

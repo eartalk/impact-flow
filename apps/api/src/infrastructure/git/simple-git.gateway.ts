@@ -66,8 +66,10 @@ export class SimpleGitGateway implements GitGateway {
     productionBranch: string;
     baseCommit: string;
     targetCommit: string;
+    onRepositoryReady?: () => Promise<void>;
   }) {
     const git = await this.prepareRepository(input);
+    await input.onRepositoryReady?.();
     const [commitOutput, nameStatusOutput, numStatOutput, patchOutput] = await Promise.all([
       git.raw([
         'log',
