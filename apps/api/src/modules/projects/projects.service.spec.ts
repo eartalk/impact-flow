@@ -20,6 +20,12 @@ function notificationService() {
 class FakeProjectRepository implements ProjectRepository {
   private projects: Project[] = [];
   private inspectionLogs: InspectionLog[] = [];
+  deletionImpact = {
+    analysisTaskCount: 0,
+    inspectionLogCount: 0,
+    notificationDeliveryCount: 0,
+  };
+  forceRemoveCalls: string[] = [];
 
   async findAll(workspaceId: string) {
     return this.projects.filter((project) => project.workspaceId === workspaceId);
@@ -70,6 +76,22 @@ class FakeProjectRepository implements ProjectRepository {
   }
   async remove(id: string) {
     this.projects = this.projects.filter((project) => project.id !== id);
+  }
+  async getDeletionImpact(id: string) {
+    const totalCount = Object.values(this.deletionImpact).reduce(
+      (sum, count) => sum + count,
+      0,
+    );
+    return {
+      projectId: id,
+      ...this.deletionImpact,
+      totalCount,
+      requiresForce: totalCount > 0,
+    };
+  }
+  async forceRemove(id: string) {
+    this.forceRemoveCalls.push(id);
+    await this.remove(id);
   }
   async updateLastAnalyzedCommit(id: string, commit: string) {
     const project = await this.readById(id);
@@ -295,6 +317,57 @@ describe('ProjectsService', () => {
 
     expect(first.map((item) => item.code)).toEqual(['worksite-service']);
     expect(second.map((item) => item.code)).toEqual(['order-service']);
+  });
+
+  it('requires force when the service has historical records', async () => {
+    const repository = new FakeProjectRepository();
+    repository.deletionImpact.analysisTaskCount = 2;
+    const service = new ProjectsService(
+      repository,
+      { testConnection: jest.fn(), detectVersion: jest.fn(), listCommits: jest.fn(), analyzeRange: jest.fn() },
+      notificationService(),
+    );
+    const project = await service.create('workspace-1', {
+      name: '工地服务',
+      code: 'worksite-service',
+      repositoryUrl: 'git@example.com:delivery/worksite.git',
+      productionBranch: 'production',
+    });
+
+    await expect(service.remove(project.id, 'workspace-1')).rejects.toThrow(
+      '请使用强制删除',
+    );
+    expect(await repository.findById(project.id, 'workspace-1')).not.toBeNull();
+  });
+
+  it('force deletes historical records only after exact-name confirmation', async () => {
+    const repository = new FakeProjectRepository();
+    repository.deletionImpact.analysisTaskCount = 2;
+    const service = new ProjectsService(
+      repository,
+      { testConnection: jest.fn(), detectVersion: jest.fn(), listCommits: jest.fn(), analyzeRange: jest.fn() },
+      notificationService(),
+    );
+    const project = await service.create('workspace-1', {
+      name: '工地服务',
+      code: 'worksite-service',
+      repositoryUrl: 'git@example.com:delivery/worksite.git',
+      productionBranch: 'production',
+    });
+
+    await expect(
+      service.remove(project.id, 'workspace-1', true, '错误名称'),
+    ).rejects.toThrow('请输入完整服务名称');
+    const result = await service.remove(
+      project.id,
+      'workspace-1',
+      true,
+      '工地服务',
+    );
+
+    expect(result).toEqual({ deleted: true, forced: true, deletedRecords: 2 });
+    expect(repository.forceRemoveCalls).toEqual([project.id]);
+    expect(await repository.findById(project.id, 'workspace-1')).toBeNull();
   });
 
   it('cannot read or inspect a project belonging to another workspace', async () => {

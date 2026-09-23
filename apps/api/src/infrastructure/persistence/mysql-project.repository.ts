@@ -9,6 +9,7 @@ import type {
   InspectionLogQuery,
   InspectionTrigger,
   Project,
+  ProjectDeletionImpact,
   UpdateProjectInput,
 } from '@impact-flow/contracts';
 import type { ProjectRepository } from '../../core/ports/project.repository';
@@ -175,6 +176,57 @@ export class MysqlProjectRepository implements ProjectRepository {
   async remove(id: string): Promise<void> {
     const db = await this.database.connection();
     await db.execute('DELETE FROM project WHERE id = ?', [id]);
+  }
+
+  async getDeletionImpact(
+    id: string,
+  ): Promise<Omit<ProjectDeletionImpact, 'projectName'>> {
+    const db = await this.database.connection();
+    const [rows] = await db.query<
+      (RowDataPacket & {
+        analysis_task_count: number;
+        inspection_log_count: number;
+        notification_delivery_count: number;
+      })[]
+    >(
+      `SELECT
+         (SELECT COUNT(*) FROM analysis_task WHERE project_id = ?) AS analysis_task_count,
+         (SELECT COUNT(*) FROM project_inspection_log WHERE project_id = ?) AS inspection_log_count,
+         (SELECT COUNT(*) FROM pending_notification_delivery WHERE project_id = ?) AS notification_delivery_count`,
+      [id, id, id],
+    );
+    const row = rows[0];
+    const result = {
+      projectId: id,
+      analysisTaskCount: Number(row?.analysis_task_count ?? 0),
+      inspectionLogCount: Number(row?.inspection_log_count ?? 0),
+      notificationDeliveryCount: Number(row?.notification_delivery_count ?? 0),
+    };
+    const totalCount =
+      result.analysisTaskCount +
+      result.inspectionLogCount +
+      result.notificationDeliveryCount;
+    return { ...result, totalCount, requiresForce: totalCount > 0 };
+  }
+
+  async forceRemove(id: string): Promise<void> {
+    const pool = await this.database.connection();
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      // 锁定服务，避免删除期间又创建新的分析或自动化记录。
+      await connection.query('SELECT id FROM project WHERE id = ? FOR UPDATE', [id]);
+      // change_file 会随 analysis_task 级联删除。
+      await connection.execute('DELETE FROM analysis_task WHERE project_id = ?', [id]);
+      // 巡检、通知等附属记录由各自的外键级联删除。
+      await connection.execute('DELETE FROM project WHERE id = ?', [id]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
   async updateLastAnalyzedCommit(id: string, commit: string): Promise<void> {

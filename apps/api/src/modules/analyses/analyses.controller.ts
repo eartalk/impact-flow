@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { AnalysesService } from './analyses.service';
 import { CreateAnalysisDto } from './dto/create-analysis.dto';
 import { ListAnalysisLogsDto } from './dto/list-analysis-logs.dto';
 import { CurrentSession, Roles } from '../auth/auth.decorators';
 import type { AuthSession } from '@impact-flow/contracts';
+import { UpdateRegressionFeedbackDto } from './dto/update-regression-feedback.dto';
 
 @Controller('analyses')
 export class AnalysesController {
@@ -36,9 +37,21 @@ export class AnalysesController {
     return this.analyses.rerun(id, session.workspace.id);
   }
 
-  @Post(':id/ai-analysis')
+  @Patch(':id/regression-targets/:targetId/feedback')
   @Roles('OWNER', 'ADMIN', 'MEMBER')
-  analyzeWithAi(@Param('id') id: string, @CurrentSession() session: AuthSession) {
-    return this.analyses.analyzeWithAi(id, session.workspace.id);
+  updateRegressionFeedback(
+    @Param('id') id: string,
+    @Param('targetId') targetId: string,
+    @Body() input: UpdateRegressionFeedbackDto,
+    @CurrentSession() session: AuthSession,
+  ) {
+    return this.analyses.updateRegressionFeedback(
+      id,
+      targetId,
+      input,
+      session.workspace.id,
+      session.user,
+    );
   }
+
 }

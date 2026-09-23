@@ -2,7 +2,7 @@ import type { Project } from '@impact-flow/contracts';
 import { AutomationScheduler } from './automation.scheduler';
 
 describe('AutomationScheduler', () => {
-  it('starts change and AI analysis after a scheduled inspection when enabled', async () => {
+  it('starts regression analysis after a scheduled inspection when enabled', async () => {
     const project = inspectedProject();
     const projects = {
       cleanupInspectionLogs: jest.fn().mockResolvedValue(undefined),
@@ -14,7 +14,6 @@ describe('AutomationScheduler', () => {
       getConfig: jest.fn().mockResolvedValue({
         autoInspectionEnabled: true,
         autoChangeAnalysisEnabled: true,
-        autoAiAnalysisEnabled: true,
         updatedAt: null,
       }),
     };
@@ -33,11 +32,7 @@ describe('AutomationScheduler', () => {
       project.workspaceId,
       'SCHEDULED',
     );
-    expect(analyses.create).toHaveBeenCalledWith(
-      project.id,
-      project.workspaceId,
-      { aiAnalysisRequested: true },
-    );
+    expect(analyses.create).toHaveBeenCalledWith(project.id, project.workspaceId);
   });
 
   it('does not inspect or analyze projects when automatic inspection is disabled', async () => {
@@ -51,7 +46,6 @@ describe('AutomationScheduler', () => {
       getConfig: jest.fn().mockResolvedValue({
         autoInspectionEnabled: false,
         autoChangeAnalysisEnabled: false,
-        autoAiAnalysisEnabled: false,
         updatedAt: null,
       }),
     };

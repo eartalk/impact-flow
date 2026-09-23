@@ -8,11 +8,10 @@ const STATUSES = [
   'SUCCESS',
   'FAILED',
   'NO_CHANGES',
-  'DISABLED',
 ] as const;
 
 export class ListAnalysisLogsDto implements AnalysisLogQuery {
-  @IsIn(['CHANGE_ANALYSIS', 'AI_ANALYSIS'])
+  @IsIn(['CHANGE_ANALYSIS'])
   type!: AnalysisLogQuery['type'];
 
   @IsOptional()

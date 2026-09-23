@@ -178,27 +178,9 @@ CREATE TABLE IF NOT EXISTS project_inspection_log (
   COLLATE utf8mb4_0900_ai_ci
   COMMENT='服务巡检日志表';
 
-CREATE TABLE IF NOT EXISTS `release` (
-  id CHAR(36) NOT NULL COMMENT '发布记录主键ID（UUID）',
-  project_id CHAR(36) NOT NULL COMMENT '关联服务ID',
-  base_commit VARCHAR(64) NOT NULL COMMENT '变更分析起始提交SHA',
-  target_commit VARCHAR(64) NOT NULL COMMENT '变更分析目标提交SHA',
-  version VARCHAR(100) NULL COMMENT '业务发布版本号',
-  status VARCHAR(30) NOT NULL COMMENT '发布检测状态',
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
-  PRIMARY KEY (id),
-  KEY idx_release_project_time (project_id, created_at),
-  CONSTRAINT fk_release_project
-    FOREIGN KEY (project_id) REFERENCES project (id)
-) ENGINE=InnoDB
-  DEFAULT CHARACTER SET utf8mb4
-  COLLATE utf8mb4_0900_ai_ci
-  COMMENT='发布版本记录表';
-
 CREATE TABLE IF NOT EXISTS analysis_task (
   id CHAR(36) NOT NULL COMMENT '分析任务主键ID（UUID）',
   project_id CHAR(36) NOT NULL COMMENT '关联服务ID',
-  release_id CHAR(36) NOT NULL COMMENT '关联发布记录ID',
   base_commit VARCHAR(64) NOT NULL COMMENT '分析起始提交SHA',
   target_commit VARCHAR(64) NOT NULL COMMENT '分析目标提交SHA',
   status VARCHAR(30) NOT NULL COMMENT '任务状态：READY/RUNNING/SUCCESS/FAILED/NO_CHANGES/CANCELLED',
@@ -216,11 +198,14 @@ CREATE TABLE IF NOT EXISTS analysis_task (
   symbol_changes JSON NULL COMMENT 'TypeScript Symbol变更列表（JSON）',
   symbol_impacts JSON NULL COMMENT 'TypeScript Symbol调用影响列表（JSON）',
   change_evidence JSON NULL COMMENT '变更证据与调用链信息（JSON）',
-  ai_analysis JSON NULL COMMENT 'AI分析结果（JSON）',
-  ai_analysis_requested TINYINT(1) NOT NULL DEFAULT 0 COMMENT '变更分析成功后是否自动执行AI分析',
-  attempt_count INT NOT NULL DEFAULT 0 COMMENT '已执行次数',
-  max_attempts INT NOT NULL DEFAULT 3 COMMENT '最大执行次数',
-  next_attempt_at DATETIME(3) NULL COMMENT '下次允许执行时间',
+  analysis_context JSON NULL COMMENT '不可变分析上下文：仓库与提交版本、分析器版本',
+  change_units JSON NULL COMMENT '语义化代码变更单元',
+  regression_plan JSON NULL COMMENT '面向测试人员的最终回归清单',
+  regression_feedback JSON NULL COMMENT '用户对回归目标的确认或排除反馈',
+  analysis_version INT NOT NULL DEFAULT 2 COMMENT '回归分析领域模型版本',
+  attempt_count INT NOT NULL DEFAULT 0 COMMENT '连续失败次数',
+  max_attempts INT NOT NULL DEFAULT 3 COMMENT '最大失败重试次数',
+  next_attempt_at DATETIME(3) NULL COMMENT '下次允许执行或轮询时间',
   worker_id VARCHAR(100) NULL COMMENT '当前租约持有者',
   locked_at DATETIME(3) NULL COMMENT '任务抢占时间',
   lock_expires_at DATETIME(3) NULL COMMENT '任务租约过期时间',
@@ -229,23 +214,14 @@ CREATE TABLE IF NOT EXISTS analysis_task (
   progress_message VARCHAR(500) NULL COMMENT '当前阶段说明',
   progress_updated_at DATETIME(3) NULL COMMENT '进度最后更新时间',
   started_at DATETIME(3) NULL COMMENT '本轮任务首次开始时间',
-  ai_attempt_count INT NOT NULL DEFAULT 0 COMMENT 'AI分析已执行次数',
-  ai_max_attempts INT NOT NULL DEFAULT 3 COMMENT 'AI分析最大执行次数',
-  ai_next_attempt_at DATETIME(3) NULL COMMENT 'AI分析下次允许执行时间',
-  ai_worker_id VARCHAR(100) NULL COMMENT 'AI任务当前租约持有者',
-  ai_locked_at DATETIME(3) NULL COMMENT 'AI任务抢占时间',
-  ai_lock_expires_at DATETIME(3) NULL COMMENT 'AI任务租约过期时间',
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '任务创建时间',
   finished_at DATETIME(3) NULL COMMENT '任务完成时间',
   PRIMARY KEY (id),
   KEY idx_analysis_project_time (project_id, created_at),
   KEY idx_analysis_status (status),
   KEY idx_analysis_worker_queue (status, next_attempt_at, lock_expires_at),
-  KEY idx_analysis_ai_worker_queue (ai_next_attempt_at, ai_lock_expires_at),
   CONSTRAINT fk_analysis_project
-    FOREIGN KEY (project_id) REFERENCES project (id),
-  CONSTRAINT fk_analysis_release
-    FOREIGN KEY (release_id) REFERENCES `release` (id)
+    FOREIGN KEY (project_id) REFERENCES project (id)
 ) ENGINE=InnoDB
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci
@@ -275,30 +251,6 @@ CREATE TABLE IF NOT EXISTS ai_provider_config (
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci
   COMMENT='AI服务商配置表';
-
-CREATE TABLE IF NOT EXISTS ai_analysis_log (
-  id CHAR(36) NOT NULL COMMENT 'AI分析日志主键ID（UUID）',
-  analysis_task_id CHAR(36) NOT NULL COMMENT '关联分析任务ID',
-  project_id CHAR(36) NOT NULL COMMENT '关联服务ID',
-  status VARCHAR(30) NOT NULL COMMENT 'AI分析状态：RUNNING/SUCCESS/FAILED/SKIPPED',
-  attempt INT NOT NULL DEFAULT 1 COMMENT '本次AI执行序号',
-  worker_id VARCHAR(100) NULL COMMENT '执行Worker标识',
-  model VARCHAR(150) NULL COMMENT '本次调用的模型名称',
-  error_message VARCHAR(2000) NULL COMMENT 'AI分析失败信息',
-  token_usage JSON NULL COMMENT '模型Token用量（JSON）',
-  started_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT 'AI分析开始时间',
-  finished_at DATETIME(3) NULL COMMENT 'AI分析完成时间',
-  PRIMARY KEY (id),
-  KEY idx_ai_analysis_log_project_time (project_id, started_at),
-  KEY idx_ai_analysis_log_task_time (analysis_task_id, started_at),
-  CONSTRAINT fk_ai_analysis_log_task
-    FOREIGN KEY (analysis_task_id) REFERENCES analysis_task (id),
-  CONSTRAINT fk_ai_analysis_log_project
-    FOREIGN KEY (project_id) REFERENCES project (id)
-) ENGINE=InnoDB
-  DEFAULT CHARACTER SET utf8mb4
-  COLLATE utf8mb4_0900_ai_ci
-  COMMENT='AI分析执行日志表';
 
 CREATE TABLE IF NOT EXISTS pending_notification_config (
   workspace_id CHAR(36) NOT NULL COMMENT '所属工作空间ID',

@@ -4,9 +4,10 @@ import { SimpleGitGateway } from '../../infrastructure/git/simple-git.gateway';
 import { ProjectsController } from './projects.controller';
 import { ProjectsService } from './projects.service';
 import { PendingNotificationsModule } from '../pending-notifications/pending-notifications.module';
+import { AiConfigsModule } from '../ai-configs/ai-configs.module';
 
 @Module({
-  imports: [PendingNotificationsModule],
+  imports: [PendingNotificationsModule, AiConfigsModule],
   controllers: [ProjectsController],
   providers: [
     ProjectsService,

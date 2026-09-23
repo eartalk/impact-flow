@@ -11,12 +11,55 @@ export type AnalysisProgressStage =
   | 'QUEUED'
   | 'SYNCING_REPOSITORY'
   | 'CALCULATING_DIFF'
-  | 'ANALYZING_IMPACT'
   | 'ANALYZING_SYMBOLS'
+  | 'INTERPRETING_CHANGES'
+  | 'EXPLORING_DEPENDENCIES'
+  | 'RESOLVING_SCENARIOS'
+  | 'PLANNING_REGRESSION'
   | 'SAVING_RESULT'
   | 'COMPLETED';
 
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface AnalysisRepositorySnapshot {
+  projectId: string;
+  projectName: string;
+  commit: string;
+  role: 'CHANGED' | 'RELATED';
+}
+
+/** 一次分析使用的不可变输入版本。历史结果只能使用该快照解释。 */
+export interface AnalysisContextSnapshot {
+  baseCommit: string;
+  targetCommit: string;
+  repositories: AnalysisRepositorySnapshot[];
+  analyzerVersion: string;
+  capturedAt: string;
+}
+
+export type ChangeKind =
+  | 'BEHAVIOR'
+  | 'CONTRACT'
+  | 'VALIDATION'
+  | 'DATA'
+  | 'CONFIG'
+  | 'REFACTOR'
+  | 'UNKNOWN';
+
+export interface ChangeUnit {
+  id: string;
+  symbolKey?: string;
+  title: string;
+  filePath: string;
+  startLine?: number;
+  changeType: 'ADDED' | 'MODIFIED' | 'DELETED';
+  changeKind: ChangeKind;
+  summary: string;
+  riskLevel: RiskLevel;
+  evidence: string[];
+}
 
 export interface ImpactModule {
   name: string;
@@ -39,6 +82,9 @@ export interface RegressionSuggestion {
   businessDomain?: string;
   /** 面向产品和测试人员的具体业务动作或场景。 */
   businessScenario?: string;
+  terminal?: 'APP' | 'PC' | 'DECO' | 'WEB' | 'BACKEND';
+  pageRoute?: string;
+  pageModule?: string;
   /** 静态分析最终追踪到的业务边界类型。 */
   boundaryType?: 'HTTP' | 'PAGE' | 'JOB' | 'MESSAGE' | 'DATA' | 'TECHNICAL' | 'UNKNOWN';
   /** 调用关系本身的可信程度。 */
@@ -53,6 +99,53 @@ export interface RegressionSuggestion {
   expectedResults?: string[];
   evidence?: string[];
   confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+}
+
+/** 面向测试人员的最终产物；每一项都必须说明回归原因和证据。 */
+export interface RegressionTarget extends RegressionSuggestion {
+  id: string;
+  /** 从代码变更传播到业务结果的可读因果链。 */
+  causalChain?: string[];
+  reason: string;
+  verificationPoints: string[];
+  relatedTests: string[];
+  automatedTestRecommendations?: AutomatedTestRecommendation[];
+}
+
+/** 仅表示建议执行的接口自动化范围，不是平台内维护的测试用例。 */
+export interface AutomatedTestRecommendation {
+  id: string;
+  title: string;
+  kind: 'API';
+  entryPoints: string[];
+  reason: string;
+  checks: string[];
+  confidence: ConfidenceLevel;
+}
+
+export type RegressionFeedbackDecision = 'CONFIRMED' | 'EXCLUDED';
+
+export interface RegressionFeedback {
+  targetId: string;
+  decision: RegressionFeedbackDecision;
+  updatedBy: string;
+  updatedByName: string;
+  updatedAt: string;
+}
+
+export interface UpdateRegressionFeedbackInput {
+  decision: RegressionFeedbackDecision | 'PENDING';
+}
+
+export interface RegressionPlan {
+  version: number;
+  summary: string;
+  riskLevel: RiskLevel;
+  targets: RegressionTarget[];
+  unknowns: string[];
+  generatedBy: 'STATIC' | 'STATIC_AND_AI';
+  model: string | null;
+  generatedAt: string;
 }
 
 export interface ChangeEvidence {
@@ -140,20 +233,17 @@ export interface PendingNotificationConnectionTest {
 
 export type AutomationCode =
   | 'AUTO_VERSION_INSPECTION'
-  | 'AUTO_CHANGE_ANALYSIS_AFTER_INSPECTION'
-  | 'AUTO_AI_ANALYSIS_AFTER_CHANGE_ANALYSIS';
+  | 'AUTO_CHANGE_ANALYSIS_AFTER_INSPECTION';
 
 export interface AutomationConfig {
   autoInspectionEnabled: boolean;
   autoChangeAnalysisEnabled: boolean;
-  autoAiAnalysisEnabled: boolean;
   updatedAt: string | null;
 }
 
 export interface UpdateAutomationConfigInput {
   autoInspectionEnabled: boolean;
   autoChangeAnalysisEnabled: boolean;
-  autoAiAnalysisEnabled: boolean;
 }
 
 export type NotificationDeliveryStatus = 'SUCCESS' | 'FAILED';
@@ -270,6 +360,17 @@ export interface Project {
   createdAt: string;
 }
 
+/** 删除服务前展示给用户的关联数据统计。 */
+export interface ProjectDeletionImpact {
+  projectId: string;
+  projectName: string;
+  analysisTaskCount: number;
+  inspectionLogCount: number;
+  notificationDeliveryCount: number;
+  totalCount: number;
+  requiresForce: boolean;
+}
+
 export type InspectionTrigger = 'SCHEDULED' | 'MANUAL';
 
 export interface InspectionLog {
@@ -338,8 +439,10 @@ export interface AnalysisTask {
   symbolChanges?: SymbolChange[];
   symbolImpacts?: SymbolImpact[];
   changeEvidence?: ChangeEvidence[];
-  aiAnalysis?: AiAnalysisResult | null;
-  aiAnalysisRequested: boolean;
+  analysisContext?: AnalysisContextSnapshot | null;
+  changeUnits?: ChangeUnit[];
+  regressionPlan?: RegressionPlan | null;
+  regressionFeedback?: RegressionFeedback[];
   commits?: CommitSummary[];
   files?: ChangedFile[];
   createdAt: string;
@@ -352,14 +455,11 @@ export interface AnalysisTask {
   progressMessage?: string | null;
   progressUpdatedAt?: string | null;
   startedAt?: string | null;
-  aiAttemptCount?: number;
-  aiMaxAttempts?: number;
-  aiNextAttemptAt?: string | null;
 }
 
-export type AnalysisLogType = 'CHANGE_ANALYSIS' | 'AI_ANALYSIS';
+export type AnalysisLogType = 'CHANGE_ANALYSIS';
 
-export type AnalysisLogStatus = AnalysisStatus | AiAnalysisStatus;
+export type AnalysisLogStatus = AnalysisStatus;
 
 export interface AnalysisExecutionLog {
   id: string;
@@ -367,7 +467,7 @@ export interface AnalysisExecutionLog {
   projectId: string;
   projectName: string;
   type: AnalysisLogType;
-  status: AnalysisStatus | AiAnalysisStatus;
+  status: AnalysisStatus;
   baseCommit: string;
   targetCommit: string;
   model: string | null;

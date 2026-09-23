@@ -1,12 +1,15 @@
 import type {
   AnalysisTask,
+  AnalysisContextSnapshot,
   AnalysisExecutionLog,
   AnalysisLogPage,
   AnalysisLogQuery,
-  AiAnalysisResult,
   ChangeEvidence,
+  ChangeUnit,
   ChangedFile,
   CommitSummary,
+  RegressionPlan,
+  RegressionFeedback,
 } from '@impact-flow/contracts';
 
 export const ANALYSIS_REPOSITORY = Symbol('ANALYSIS_REPOSITORY');
@@ -22,23 +25,12 @@ export interface AnalysisRepository {
   findById(id: string, workspaceId: string): Promise<AnalysisTask | null>;
   /** 系统级：应用启动时恢复全部工作空间中未完成的基础分析任务 */
   findPendingForWorker(): Promise<AnalysisTask[]>;
-  /** 系统级：应用启动时恢复全部工作空间中未完成的 AI 分析任务 */
-  findPendingAiForWorker(): Promise<AnalysisTask[]>;
-  /** 系统级：应用启动时恢复全部工作空间中已请求但未执行的 AI 分析任务 */
-  findRequestedAiForWorker(): Promise<AnalysisTask[]>;
   /** 系统级：任务执行器加载任务，任务自身是作用域的权威来源 */
   findByIdForWorkerTask(id: string): Promise<AnalysisTask | null>;
   /** 原子抢占一条到期任务；支持多实例 SKIP LOCKED 与过期租约恢复。 */
   claimNextForWorker(workerId: string, leaseMs: number): Promise<AnalysisTask | null>;
-  claimNextAiForWorker(workerId: string, leaseMs: number): Promise<AnalysisTask | null>;
   /** 失败后重新排队；达到最大次数时转为最终 FAILED。 */
   retryOrFail(
-    id: string,
-    workerId: string,
-    errorMessage: string,
-    nextAttemptAt: Date,
-  ): Promise<'RETRY' | 'FAILED'>;
-  retryOrFailAi(
     id: string,
     workerId: string,
     errorMessage: string,
@@ -75,10 +67,12 @@ export interface AnalysisRepository {
       symbolChanges: NonNullable<AnalysisTask['symbolChanges']>;
       symbolImpacts: NonNullable<AnalysisTask['symbolImpacts']>;
       changeEvidence: ChangeEvidence[];
+      analysisContext: AnalysisContextSnapshot;
+      changeUnits: ChangeUnit[];
+      regressionPlan: RegressionPlan;
     },
     workerId?: string,
   ): Promise<AnalysisTask>;
-  startAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask>;
-  finishAiAnalysis(id: string, result: AiAnalysisResult, workerId?: string): Promise<AnalysisTask>;
   fail(id: string, errorMessage: string): Promise<AnalysisTask>;
+  updateRegressionFeedback(id: string, feedback: RegressionFeedback[]): Promise<void>;
 }

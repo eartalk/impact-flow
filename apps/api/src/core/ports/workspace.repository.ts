@@ -20,7 +20,7 @@ export interface WorkspaceRepository {
    */
   listForUser(userId: string): Promise<WorkspaceOverview[]>;
 
-  /** 工作空间是否为 ACTIVE。后台任务执行器用于判断是否继续触发自动 AI 等后续链路 */
+  /** 工作空间是否为 ACTIVE。后台任务执行器用于判断是否继续触发后续链路。 */
   isActive(workspaceId: string): Promise<boolean>;
 
   /**
@@ -77,7 +77,7 @@ export interface WorkspaceRepository {
    * 不一致状态，而调度器一旦恢复该空间就会把这些任务重新跑起来。
    *
    * 已经 RUNNING 的任务不在此处理：允许它跑完并持久化结果，
-   * 但归档后其后续自动 AI 与通知链路会被跳过（见 AnalysesService.process）。
+   * 但归档后不会再创建新的巡检和分析任务。
    *
    * 仅在状态确实由 ACTIVE 变为 ARCHIVED 时返回 true。
    */

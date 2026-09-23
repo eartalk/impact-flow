@@ -101,13 +101,41 @@ export class ProjectsService {
     return this.projects.update(id, input);
   }
 
-  async remove(id: string, workspaceId: string) {
-    if (!(await this.projects.findById(id, workspaceId))) {
+  async getDeletionImpact(id: string, workspaceId: string) {
+    const project = await this.projects.findById(id, workspaceId);
+    if (!project) {
       throw new NotFoundException('服务不存在');
+    }
+    const impact = await this.projects.getDeletionImpact(id);
+    return { ...impact, projectName: project.name };
+  }
+
+  async remove(
+    id: string,
+    workspaceId: string,
+    force = false,
+    confirmation?: string,
+  ) {
+    const project = await this.projects.findById(id, workspaceId);
+    if (!project) throw new NotFoundException('服务不存在');
+
+    const impact = await this.projects.getDeletionImpact(id);
+    if (force) {
+      if (confirmation !== project.name) {
+        throw new BadRequestException('请输入完整服务名称以确认永久删除');
+      }
+      await this.projects.forceRemove(id);
+      return { deleted: true, forced: true, deletedRecords: impact.totalCount };
+    }
+
+    if (impact.requiresForce) {
+      throw new ConflictException(
+        `该服务关联 ${impact.analysisTaskCount} 次回归分析，请使用强制删除`,
+      );
     }
     try {
       await this.projects.remove(id);
-      return { deleted: true };
+      return { deleted: true, forced: false, deletedRecords: impact.totalCount };
     } catch (error) {
       const code = (error as { code?: string }).code;
       if (code === 'ER_ROW_IS_REFERENCED_2') {

@@ -34,8 +34,24 @@ export class ProjectsController {
 
   @Delete(':id')
   @Roles('OWNER', 'ADMIN')
-  remove(@Param('id') id: string, @CurrentSession() session: AuthSession) {
-    return this.projects.remove(id, session.workspace.id);
+  remove(
+    @Param('id') id: string,
+    @Query('force') force: string | undefined,
+    @Query('confirmation') confirmation: string | undefined,
+    @CurrentSession() session: AuthSession,
+  ) {
+    return this.projects.remove(
+      id,
+      session.workspace.id,
+      force === 'true',
+      confirmation,
+    );
+  }
+
+  @Get(':id/deletion-impact')
+  @Roles('OWNER', 'ADMIN')
+  deletionImpact(@Param('id') id: string, @CurrentSession() session: AuthSession) {
+    return this.projects.getDeletionImpact(id, session.workspace.id);
   }
 
   @Post(':id/detect-version')

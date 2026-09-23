@@ -83,9 +83,7 @@ export class AutomationScheduler
           ) {
             return;
           }
-          await this.analyses.create(project.id, project.workspaceId, {
-            aiAnalysisRequested: automation.autoAiAnalysisEnabled,
-          });
+          await this.analyses.create(project.id, project.workspaceId);
         }),
       );
       const automationFailures = analysisResults.filter(

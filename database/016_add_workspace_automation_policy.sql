@@ -19,8 +19,3 @@ CREATE TABLE IF NOT EXISTS workspace_automation_policy (
   DEFAULT CHARACTER SET utf8mb4
   COLLATE utf8mb4_0900_ai_ci
   COMMENT='工作空间自动化策略表';
-
-ALTER TABLE analysis_task
-  ADD COLUMN ai_analysis_requested TINYINT(1) NOT NULL DEFAULT 0
-    COMMENT '变更分析成功后是否自动执行AI分析'
-    AFTER ai_analysis;

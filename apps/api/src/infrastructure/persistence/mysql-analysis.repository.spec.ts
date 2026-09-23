@@ -17,6 +17,9 @@ describe('MysqlAnalysisRepository', () => {
     expect(sql).not.toContain('symbol_impacts');
     expect(sql).not.toContain('regression_suggestions');
     expect(sql).toContain('a.progress_stage');
-    expect(sql).toContain('JSON_EXTRACT(a.ai_analysis');
+    expect(sql).toContain('a.regression_plan');
+    expect(sql).toContain('a.regression_feedback');
+    expect(sql).not.toContain('analysis_context');
+    expect(sql).not.toContain('change_units');
   });
 });

@@ -9,23 +9,9 @@ CREATE TABLE IF NOT EXISTS project (
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY uk_project_code (code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
-CREATE TABLE IF NOT EXISTS `release` (
-  id CHAR(36) PRIMARY KEY,
-  project_id CHAR(36) NOT NULL,
-  base_commit VARCHAR(64) NOT NULL,
-  target_commit VARCHAR(64) NOT NULL,
-  version VARCHAR(100) NULL,
-  status VARCHAR(30) NOT NULL,
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  CONSTRAINT fk_release_project FOREIGN KEY (project_id) REFERENCES project(id),
-  KEY idx_release_project_time (project_id, created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-
 CREATE TABLE IF NOT EXISTS analysis_task (
   id CHAR(36) PRIMARY KEY,
   project_id CHAR(36) NOT NULL,
-  release_id CHAR(36) NOT NULL,
   base_commit VARCHAR(64) NOT NULL,
   target_commit VARCHAR(64) NOT NULL,
   status VARCHAR(30) NOT NULL,
@@ -38,7 +24,6 @@ CREATE TABLE IF NOT EXISTS analysis_task (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   finished_at DATETIME(3) NULL,
   CONSTRAINT fk_analysis_project FOREIGN KEY (project_id) REFERENCES project(id),
-  CONSTRAINT fk_analysis_release FOREIGN KEY (release_id) REFERENCES `release`(id),
   KEY idx_analysis_project_time (project_id, created_at),
   KEY idx_analysis_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

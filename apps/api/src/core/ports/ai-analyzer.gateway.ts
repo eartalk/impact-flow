@@ -1,6 +1,8 @@
 import type {
   AiAnalysisResult,
   AiProviderConnectionTest,
+  AnalysisContextSnapshot,
+  ChangeUnit,
   ChangeEvidence,
   ChangedFile,
   CommitSummary,
@@ -23,6 +25,8 @@ export interface AiAnalysisInput {
   additions: number;
   deletions: number;
   changeEvidence: ChangeEvidence[];
+  analysisContext?: AnalysisContextSnapshot;
+  changeUnits?: ChangeUnit[];
   ruleAnalysis: {
     riskLevel: RiskLevel;
     riskSummary: string;

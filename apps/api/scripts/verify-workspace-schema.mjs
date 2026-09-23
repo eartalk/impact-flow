@@ -38,6 +38,11 @@ const requirements = [
   ['analysis_task', 'next_attempt_at'],
   ['analysis_task', 'worker_id'],
   ['analysis_task', 'lock_expires_at'],
+  ['analysis_task', 'analysis_context'],
+  ['analysis_task', 'change_units'],
+  ['analysis_task', 'regression_plan'],
+  ['analysis_task', 'regression_feedback'],
+  ['analysis_task', 'analysis_version'],
 ];
 
 try {
@@ -53,6 +58,37 @@ try {
   const missing = requirements
     .map(([table, column]) => `${table}.${column}`)
     .filter((column) => !available.has(column));
+  const forbidden = [
+    'analysis_task.ai_analysis',
+    'analysis_task.ai_analysis_requested',
+    'analysis_task.release_id',
+    'project.business_system_code',
+    'project.business_system_name',
+    'project.repository_kind',
+  ].filter((column) => available.has(column));
+  if (forbidden.length) {
+    missing.push(`deprecated columns remain: ${forbidden.join(', ')}`);
+  }
+  const [tables] = await connection.query(
+    `SELECT TABLE_NAME AS tableName FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?`,
+    [database],
+  );
+  const tableNames = new Set(tables.map((table) => table.tableName));
+  const deprecatedTables = [
+    'service_knowledge_build',
+    'ai_analysis_log',
+    'workspace_invitation',
+    'release',
+    'business_module_catalog',
+    'analysis_module_scope',
+    'automation_module_binding',
+    'automation_execution',
+    'automation_module_result',
+  ]
+    .filter((table) => tableNames.has(table));
+  if (deprecatedTables.length) {
+    missing.push(`deprecated tables remain: ${deprecatedTables.join(', ')}`);
+  }
 
   const [analysisColumns] = await connection.query(
     `SELECT COLUMN_COMMENT AS comment

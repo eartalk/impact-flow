@@ -6,7 +6,6 @@ import { SYMBOL_ANALYZER_GATEWAY } from '../../core/ports/symbol-analyzer.gatewa
 import { TypeScriptSymbolAnalyzer } from '../../infrastructure/typescript/typescript-symbol.analyzer';
 import { AiConfigsModule } from '../ai-configs/ai-configs.module';
 import { AnalysisWorker } from './analysis.worker';
-import { AiAnalysisWorker } from './ai-analysis.worker';
 
 @Module({
   imports: [ProjectsModule, AiConfigsModule],
@@ -14,7 +13,6 @@ import { AiAnalysisWorker } from './ai-analysis.worker';
   providers: [
     AnalysesService,
     AnalysisWorker,
-    AiAnalysisWorker,
     TypeScriptSymbolAnalyzer,
     { provide: SYMBOL_ANALYZER_GATEWAY, useExisting: TypeScriptSymbolAnalyzer },
   ],

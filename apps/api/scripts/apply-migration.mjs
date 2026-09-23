@@ -29,10 +29,32 @@ const connection = await mysql.createConnection({
 
 try {
   const sql = await readFile(resolve(workspaceRoot, 'database', migration), 'utf8');
-  await connection.query(sql);
+  for (const statement of splitSqlScript(sql)) {
+    await connection.query(statement);
+  }
   console.log(`Applied migration ${migration}`);
 } finally {
   await connection.end();
+}
+
+function splitSqlScript(sql) {
+  const statements = [];
+  let delimiter = ';';
+  let buffer = '';
+  for (const rawLine of sql.split(/\r?\n/)) {
+    const delimiterMatch = rawLine.trim().match(/^DELIMITER\s+(.+)$/i);
+    if (delimiterMatch) {
+      delimiter = delimiterMatch[1];
+      continue;
+    }
+    buffer += `${rawLine}\n`;
+    if (!buffer.trimEnd().endsWith(delimiter)) continue;
+    const statement = buffer.trimEnd().slice(0, -delimiter.length).trim();
+    if (statement) statements.push(statement);
+    buffer = '';
+  }
+  if (buffer.trim()) statements.push(buffer.trim());
+  return statements;
 }
 
 async function readEnvironment(path) {

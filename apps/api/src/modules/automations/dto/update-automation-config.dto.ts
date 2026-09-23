@@ -10,6 +10,4 @@ export class UpdateAutomationConfigDto
   @IsBoolean()
   autoChangeAnalysisEnabled!: boolean;
 
-  @IsBoolean()
-  autoAiAnalysisEnabled!: boolean;
 }

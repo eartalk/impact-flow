@@ -286,6 +286,17 @@ export class ChangeImpactAnalyzer {
     return this.unique((symbol.httpRoutes ?? []).map((route) => `${route.method} ${route.path}`));
   }
 
+  private httpRoutesMatch(
+    left: { method: string; path: string },
+    right: { method: string; path: string },
+  ) {
+    if (left.method !== 'ALL' && right.method !== 'ALL' && left.method !== right.method) return false;
+    const parts = (path: string) => path.replace(/[?#].*$/, '').replace(/\{[^}]+\}/g, ':param').split('/').filter(Boolean);
+    const a = parts(left.path);
+    const b = parts(right.path);
+    return a.length === b.length && a.every((part, index) => part.startsWith(':') || b[index]?.startsWith(':') || part === b[index]);
+  }
+
   private scopeTargetType(boundary: NonNullable<RegressionSuggestion['boundaryType']>): NonNullable<RegressionSuggestion['targetType']> {
     const mapping: Partial<Record<typeof boundary, NonNullable<RegressionSuggestion['targetType']>>> = {
       HTTP: 'API', PAGE: 'PAGE', JOB: 'JOB', MESSAGE: 'JOB', DATA: 'DATA',

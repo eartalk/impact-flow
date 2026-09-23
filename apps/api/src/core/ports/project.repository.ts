@@ -4,6 +4,7 @@ import type {
   InspectionLogQuery,
   InspectionTrigger,
   Project,
+  ProjectDeletionImpact,
   UpdateProjectInput,
 } from '@impact-flow/contracts';
 
@@ -33,6 +34,8 @@ export interface ProjectRepository {
   create(workspaceId: string, input: CreateProjectInput): Promise<Project>;
   update(id: string, input: UpdateProjectInput): Promise<Project>;
   remove(id: string): Promise<void>;
+  getDeletionImpact(id: string): Promise<Omit<ProjectDeletionImpact, 'projectName'>>;
+  forceRemove(id: string): Promise<void>;
   updateLastAnalyzedCommit(id: string, commit: string): Promise<void>;
   markInspectionRunning(id: string): Promise<void>;
   completeInspection(

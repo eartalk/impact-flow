@@ -6,10 +6,13 @@ import type {
   AnalysisLogPage,
   AnalysisLogQuery,
   AnalysisTask,
-  AiAnalysisResult,
+  AnalysisContextSnapshot,
   ChangeEvidence,
+  ChangeUnit,
   ChangedFile,
   CommitSummary,
+  RegressionPlan,
+  RegressionFeedback,
 } from '@impact-flow/contracts';
 import type { AnalysisRepository } from '../../core/ports/analysis.repository';
 import { DatabaseService } from './database.service';
@@ -35,8 +38,10 @@ type AnalysisRow = RowDataPacket & {
   symbol_changes: string | AnalysisTask['symbolChanges'] | null;
   symbol_impacts: string | AnalysisTask['symbolImpacts'] | null;
   change_evidence: string | ChangeEvidence[] | null;
-  ai_analysis: string | AnalysisTask['aiAnalysis'] | null;
-  ai_analysis_requested: number;
+  analysis_context: string | AnalysisContextSnapshot | null;
+  change_units: string | ChangeUnit[] | null;
+  regression_plan: string | RegressionPlan | null;
+  regression_feedback: string | RegressionFeedback[] | null;
   commit_summary: string | CommitSummary[] | null;
   created_at: string;
   finished_at: string | null;
@@ -48,9 +53,6 @@ type AnalysisRow = RowDataPacket & {
   progress_message: string | null;
   progress_updated_at: string | null;
   started_at: string | null;
-  ai_attempt_count: number;
-  ai_max_attempts: number;
-  ai_next_attempt_at: string | null;
 };
 
 type ChangeFileRow = RowDataPacket & {
@@ -107,6 +109,14 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return this.findByIdInternal(id);
   }
 
+  async updateRegressionFeedback(id: string, feedback: RegressionFeedback[]) {
+    const db = await this.database.connection();
+    await db.execute(
+      'UPDATE analysis_task SET regression_feedback = ? WHERE id = ?',
+      [JSON.stringify(feedback), id],
+    );
+  }
+
   async claimNextForWorker(workerId: string, leaseMs: number) {
     const db = await this.database.connection();
     const connection = await db.getConnection();
@@ -143,68 +153,6 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
              started_at = COALESCE(started_at, CURRENT_TIMESTAMP(3))
          WHERE id = ?`,
         [workerId, new Date(Date.now() + leaseMs), id],
-      );
-      await connection.commit();
-      return this.findByIdInternal(id);
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
-    }
-  }
-
-  async claimNextAiForWorker(workerId: string, leaseMs: number) {
-    const db = await this.database.connection();
-    const connection = await db.getConnection();
-    try {
-      await connection.beginTransaction();
-      const [rows] = await connection.query<(RowDataPacket & { id: string })[]>(
-        `SELECT a.id FROM analysis_task a
-         JOIN project p ON p.id = a.project_id
-         JOIN workspace w ON w.id = p.workspace_id
-         WHERE w.status = 'ACTIVE' AND a.status = 'SUCCESS'
-           AND a.ai_attempt_count < a.ai_max_attempts
-           AND (
-             (JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.status')) = 'RUNNING'
-               AND (a.ai_next_attempt_at IS NULL OR a.ai_next_attempt_at <= CURRENT_TIMESTAMP(3))
-               AND (a.ai_worker_id IS NULL OR a.ai_lock_expires_at < CURRENT_TIMESTAMP(3)))
-             OR (a.ai_analysis_requested = 1 AND a.ai_analysis IS NULL)
-           )
-         ORDER BY COALESCE(a.ai_next_attempt_at, a.created_at), a.created_at
-         LIMIT 1 FOR UPDATE SKIP LOCKED`,
-      );
-      const id = rows[0]?.id;
-      if (!id) {
-        await connection.commit();
-        return null;
-      }
-      await connection.execute(
-        `UPDATE analysis_task
-         SET ai_attempt_count = ai_attempt_count + 1,
-             ai_worker_id = ?, ai_locked_at = CURRENT_TIMESTAMP(3),
-             ai_lock_expires_at = ?, ai_next_attempt_at = NULL,
-             ai_analysis = JSON_OBJECT(
-               'status', 'RUNNING', 'summary', NULL, 'riskLevel', NULL,
-               'keyFindings', JSON_ARRAY(), 'regressionSuggestions', JSON_ARRAY(),
-               'model', NULL, 'analyzedAt', NULL, 'errorMessage', NULL
-             )
-         WHERE id = ?`,
-        [workerId, new Date(Date.now() + leaseMs), id],
-      );
-      await connection.execute(
-        `UPDATE ai_analysis_log
-         SET status = 'FAILED', error_message = '服务升级或重启后已由持久化 Worker 重新排队',
-             finished_at = CURRENT_TIMESTAMP(3)
-         WHERE analysis_task_id = ? AND status = 'RUNNING' AND worker_id IS NULL`,
-        [id],
-      );
-      await connection.execute(
-        `INSERT INTO ai_analysis_log
-         (id, analysis_task_id, project_id, status, attempt, worker_id)
-         SELECT ?, id, project_id, 'RUNNING', ai_attempt_count, ?
-         FROM analysis_task WHERE id = ?`,
-        [randomUUID(), workerId, id],
       );
       await connection.commit();
       return this.findByIdInternal(id);
@@ -253,62 +201,6 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       ],
     );
     return retry ? 'RETRY' : 'FAILED';
-  }
-
-  async retryOrFailAi(
-    id: string,
-    workerId: string,
-    errorMessage: string,
-    nextAttemptAt: Date,
-  ): Promise<'RETRY' | 'FAILED'> {
-    const db = await this.database.connection();
-    const connection = await db.getConnection();
-    try {
-      await connection.beginTransaction();
-      const [rows] = await connection.query<
-        (RowDataPacket & { ai_attempt_count: number; ai_max_attempts: number })[]
-      >(
-        `SELECT ai_attempt_count, ai_max_attempts FROM analysis_task
-         WHERE id = ? AND ai_worker_id = ? LIMIT 1 FOR UPDATE`,
-        [id, workerId],
-      );
-      const row = rows[0];
-      if (!row) {
-        await connection.rollback();
-        return 'FAILED';
-      }
-      const retry = row.ai_attempt_count < row.ai_max_attempts;
-      const result: AiAnalysisResult = {
-        status: retry ? 'RUNNING' : 'FAILED',
-        summary: null,
-        riskLevel: null,
-        keyFindings: [],
-        regressionSuggestions: [],
-        model: null,
-        analyzedAt: retry ? null : new Date().toISOString(),
-        errorMessage: errorMessage.slice(0, 1000),
-      };
-      await connection.execute(
-        `UPDATE analysis_task
-         SET ai_analysis = ?, ai_next_attempt_at = ?, ai_worker_id = NULL,
-             ai_locked_at = NULL, ai_lock_expires_at = NULL
-         WHERE id = ? AND ai_worker_id = ?`,
-        [JSON.stringify(result), retry ? nextAttemptAt : null, id, workerId],
-      );
-      await connection.execute(
-        `UPDATE ai_analysis_log
-         SET status = 'FAILED', error_message = ?, finished_at = CURRENT_TIMESTAMP(3)
-         WHERE analysis_task_id = ? AND worker_id = ? AND status = 'RUNNING'`,
-        [errorMessage.slice(0, 2000), id, workerId],
-      );
-      await connection.commit();
-      return retry ? 'RETRY' : 'FAILED';
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
-    }
   }
 
   async updateProgress(
@@ -373,28 +265,6 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     return rows.map((row) => this.map(row));
   }
 
-  async findPendingAiForWorker(): Promise<AnalysisTask[]> {
-    const db = await this.database.connection();
-    const [rows] = await db.query<AnalysisRow[]>(
-      `${this.baseSelect()}
-       WHERE JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.status')) = 'RUNNING'
-       ORDER BY a.created_at`,
-    );
-    return rows.map((row) => this.map(row));
-  }
-
-  async findRequestedAiForWorker(): Promise<AnalysisTask[]> {
-    const db = await this.database.connection();
-    const [rows] = await db.query<AnalysisRow[]>(
-      `${this.baseSelect()}
-       WHERE a.status = 'SUCCESS'
-         AND a.ai_analysis_requested = 1
-         AND a.ai_analysis IS NULL
-       ORDER BY a.created_at`,
-    );
-    return rows.map((row) => this.map(row));
-  }
-
   async findActiveByProject(
     projectId: string,
     workspaceId: string,
@@ -418,26 +288,20 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     const page = Math.max(1, query.page ?? 1);
     const pageSize = Math.min(100, Math.max(1, query.pageSize ?? 10));
     const offset = (page - 1) * pageSize;
-    const changeAnalysis = query.type === 'CHANGE_ANALYSIS';
-
     // projectId 可省略，工作空间条件必须始终存在
     const conditions: string[] = ['p.workspace_id = ?'];
     const filterValues: Array<string | number> = [workspaceId];
     if (query.projectId) {
-      conditions.push(changeAnalysis ? 'a.project_id = ?' : 'l.project_id = ?');
+      conditions.push('a.project_id = ?');
       filterValues.push(query.projectId);
     }
     if (query.status) {
-      conditions.push(changeAnalysis ? 'a.status = ?' : 'l.status = ?');
+      conditions.push('a.status = ?');
       filterValues.push(query.status);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const from = changeAnalysis
-      ? `FROM analysis_task a
-         JOIN project p ON p.id = a.project_id`
-      : `FROM ai_analysis_log l
-         JOIN analysis_task a ON a.id = l.analysis_task_id
-         JOIN project p ON p.id = l.project_id`;
+    const from = `FROM analysis_task a
+         JOIN project p ON p.id = a.project_id`;
 
     const [counts] = await db.query<CountRow[]>(
       `SELECT COUNT(*) AS total ${from} ${where}`,
@@ -445,24 +309,14 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     );
     const total = Number(counts[0]?.total ?? 0);
 
-    const sql = changeAnalysis
-      ? `SELECT a.id, a.id AS analysis_id, a.project_id, p.name AS project_name,
+    const sql = `SELECT a.id, a.id AS analysis_id, a.project_id, p.name AS project_name,
                 'CHANGE_ANALYSIS' AS type, a.status, a.base_commit, a.target_commit,
                 NULL AS model, a.error_message, NULL AS token_usage,
                 a.attempt_count, a.max_attempts, a.progress_stage, NULL AS attempt,
                 COALESCE(a.started_at, a.created_at) AS started_at, a.finished_at,
                 TIMESTAMPDIFF(MICROSECOND, COALESCE(a.started_at, a.created_at), a.finished_at) / 1000 AS duration_ms
          ${from} ${where}
-         ORDER BY a.created_at DESC LIMIT ? OFFSET ?`
-      : `SELECT l.id, l.analysis_task_id AS analysis_id, l.project_id,
-                p.name AS project_name, 'AI_ANALYSIS' AS type, l.status,
-                a.base_commit, a.target_commit, l.model, l.error_message,
-                NULL AS attempt_count, NULL AS max_attempts, NULL AS progress_stage,
-                l.attempt,
-                l.token_usage, l.started_at, l.finished_at,
-                TIMESTAMPDIFF(MICROSECOND, l.started_at, l.finished_at) / 1000 AS duration_ms
-         ${from} ${where}
-         ORDER BY l.started_at DESC LIMIT ? OFFSET ?`;
+         ORDER BY a.created_at DESC LIMIT ? OFFSET ?`;
     const [rows] = await db.query<AnalysisLogRow[]>(sql, [
       ...filterValues,
       pageSize,
@@ -484,24 +338,16 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     const connection = await db.getConnection();
     try {
       await connection.beginTransaction();
-      const releaseId = randomUUID();
       const analysisId = randomUUID();
       await connection.execute(
-        `INSERT INTO \`release\`
-         (id, project_id, base_commit, target_commit, status)
-         VALUES (?, ?, ?, ?, 'DETECTED')`,
-        [releaseId, input.projectId, input.baseCommit, input.targetCommit],
-      );
-      await connection.execute(
         `INSERT INTO analysis_task
-         (id, project_id, release_id, base_commit, target_commit, status,
-          commit_count, changed_file_count, additions, deletions, error_message,
-          ai_analysis_requested, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, project_id, base_commit, target_commit, status,
+           commit_count, changed_file_count, additions, deletions, error_message,
+           finished_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           analysisId,
           input.projectId,
-          releaseId,
           input.baseCommit,
           input.targetCommit,
           input.status,
@@ -510,7 +356,6 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
           input.additions,
           input.deletions,
           input.errorMessage,
-          input.aiAnalysisRequested ? 1 : 0,
           input.finishedAt ? new Date(input.finishedAt) : null,
         ],
       );
@@ -553,6 +398,9 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       symbolChanges: NonNullable<AnalysisTask['symbolChanges']>;
       symbolImpacts: NonNullable<AnalysisTask['symbolImpacts']>;
       changeEvidence: ChangeEvidence[];
+      analysisContext: AnalysisContextSnapshot;
+      changeUnits: ChangeUnit[];
+      regressionPlan: RegressionPlan;
     },
     workerId?: string,
   ): Promise<AnalysisTask> {
@@ -565,7 +413,8 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
          SET status = 'SUCCESS', commit_count = ?, changed_file_count = ?,
              additions = ?, deletions = ?, commit_summary = ?, risk_level = ?,
              risk_summary = ?, impacted_modules = ?, regression_suggestions = ?,
-             symbol_summary = ?, symbol_changes = ?, symbol_impacts = ?, change_evidence = ?,
+              symbol_summary = ?, symbol_changes = ?, symbol_impacts = ?, change_evidence = ?,
+              analysis_context = ?, change_units = ?, regression_plan = ?, analysis_version = 2,
              finished_at = CURRENT_TIMESTAMP(3), next_attempt_at = NULL,
              worker_id = NULL, locked_at = NULL, lock_expires_at = NULL,
              progress_stage = 'COMPLETED', progress_percent = 100,
@@ -585,6 +434,9 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
           JSON.stringify(result.symbolChanges),
           JSON.stringify(result.symbolImpacts),
           JSON.stringify(result.changeEvidence),
+          JSON.stringify(result.analysisContext),
+          JSON.stringify(result.changeUnits),
+          JSON.stringify(result.regressionPlan),
           id,
           ...(workerId ? [workerId] : []),
         ],
@@ -594,81 +446,6 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
         return (await this.findByIdInternal(id))!;
       }
       await this.insertFiles(connection, id, result.files);
-      await connection.execute(
-        `UPDATE \`release\` r
-         JOIN analysis_task a ON a.release_id = r.id
-         SET r.status = 'ANALYZED'
-         WHERE a.id = ?`,
-        [id],
-      );
-      await connection.commit();
-      return (await this.findByIdInternal(id))!;
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
-    }
-  }
-
-  async startAiAnalysis(id: string, result: AiAnalysisResult): Promise<AnalysisTask> {
-    const db = await this.database.connection();
-    const connection = await db.getConnection();
-    try {
-      await connection.beginTransaction();
-      await connection.execute(
-        `UPDATE analysis_task
-         SET ai_analysis = ?, ai_analysis_requested = 1,
-             ai_attempt_count = 0, ai_next_attempt_at = NULL,
-             ai_worker_id = NULL, ai_locked_at = NULL, ai_lock_expires_at = NULL
-         WHERE id = ?`,
-        [JSON.stringify(result), id],
-      );
-      await connection.commit();
-      return (await this.findByIdInternal(id))!;
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
-    }
-  }
-
-  async finishAiAnalysis(
-    id: string,
-    result: AiAnalysisResult,
-    workerId?: string,
-  ): Promise<AnalysisTask> {
-    const db = await this.database.connection();
-    const connection = await db.getConnection();
-    try {
-      await connection.beginTransaction();
-      const [updated] = await connection.execute(
-        `UPDATE analysis_task SET ai_analysis = ?, ai_next_attempt_at = NULL,
-           ai_worker_id = NULL, ai_locked_at = NULL, ai_lock_expires_at = NULL
-         WHERE id = ? ${workerId ? 'AND ai_worker_id = ?' : ''}`,
-        [JSON.stringify(result), id, ...(workerId ? [workerId] : [])],
-      );
-      if (!('affectedRows' in updated) || updated.affectedRows === 0) {
-        await connection.rollback();
-        return (await this.findByIdInternal(id))!;
-      }
-      await connection.execute(
-        `UPDATE ai_analysis_log
-         SET status = ?, model = ?, error_message = ?, token_usage = ?,
-             finished_at = CURRENT_TIMESTAMP(3)
-         WHERE analysis_task_id = ? AND status = 'RUNNING'
-           ${workerId ? 'AND worker_id = ?' : ''}
-         ORDER BY started_at DESC LIMIT 1`,
-        [
-          result.status,
-          result.model,
-          result.errorMessage,
-          result.tokenUsage ? JSON.stringify(result.tokenUsage) : null,
-          id,
-          ...(workerId ? [workerId] : []),
-        ],
-      );
       await connection.commit();
       return (await this.findByIdInternal(id))!;
     } catch (error) {
@@ -732,22 +509,11 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
               a.base_commit, a.target_commit, a.status,
               a.commit_count, a.changed_file_count, a.additions, a.deletions,
               a.error_message, a.risk_level, a.risk_summary,
-              a.ai_analysis_requested, a.created_at, a.finished_at,
+              a.regression_plan, a.regression_feedback,
+              a.created_at, a.finished_at,
               a.attempt_count, a.max_attempts, a.next_attempt_at,
               a.progress_stage, a.progress_percent, a.progress_message,
-              a.progress_updated_at, a.started_at,
-              a.ai_attempt_count, a.ai_max_attempts, a.ai_next_attempt_at,
-              CASE WHEN a.ai_analysis IS NULL THEN NULL ELSE JSON_OBJECT(
-                'status', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.status')),
-                'summary', NULL,
-                'riskLevel', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.riskLevel')),
-                'keyFindings', JSON_ARRAY(),
-                'regressionSuggestions', JSON_ARRAY(),
-                'model', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.model')),
-                'analyzedAt', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.analyzedAt')),
-                'errorMessage', JSON_UNQUOTE(JSON_EXTRACT(a.ai_analysis, '$.errorMessage')),
-                'tokenUsage', JSON_EXTRACT(a.ai_analysis, '$.tokenUsage')
-              ) END AS ai_analysis
+              a.progress_updated_at, a.started_at
             FROM analysis_task a
             JOIN project p ON p.id = a.project_id`;
   }
@@ -763,7 +529,10 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
     const symbolChanges = this.parseJson(row.symbol_changes) ?? [];
     const symbolImpacts = this.parseJson(row.symbol_impacts) ?? [];
     const changeEvidence = this.parseJson<ChangeEvidence[]>(row.change_evidence) ?? [];
-    const aiAnalysis = this.parseJson(row.ai_analysis) ?? null;
+    const analysisContext = this.parseJson<AnalysisContextSnapshot>(row.analysis_context) ?? null;
+    const changeUnits = this.parseJson<ChangeUnit[]>(row.change_units) ?? [];
+    const regressionPlan = this.parseJson<RegressionPlan>(row.regression_plan) ?? null;
+    const regressionFeedback = this.parseJson<RegressionFeedback[]>(row.regression_feedback) ?? [];
     return {
       id: row.id,
       projectId: row.project_id,
@@ -784,8 +553,10 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
       symbolChanges,
       symbolImpacts,
       changeEvidence,
-      aiAnalysis,
-      aiAnalysisRequested: Boolean(row.ai_analysis_requested),
+      analysisContext,
+      changeUnits,
+      regressionPlan,
+      regressionFeedback,
       commits,
       createdAt: mysqlDateTimeToIso(row.created_at),
       finishedAt: row.finished_at
@@ -803,11 +574,6 @@ export class MysqlAnalysisRepository implements AnalysisRepository {
         ? mysqlDateTimeToIso(row.progress_updated_at)
         : null,
       startedAt: row.started_at ? mysqlDateTimeToIso(row.started_at) : null,
-      aiAttemptCount: Number(row.ai_attempt_count ?? 0),
-      aiMaxAttempts: Number(row.ai_max_attempts ?? 3),
-      aiNextAttemptAt: row.ai_next_attempt_at
-        ? mysqlDateTimeToIso(row.ai_next_attempt_at)
-        : null,
     };
   }
 

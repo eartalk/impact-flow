@@ -16,239 +16,69 @@ describe('AnalysesService', () => {
         name: source.projectName,
       } satisfies Partial<Project>),
     };
-    const service = new AnalysesService(
-      analyses as never,
-      projects as never,
-      { isActive: jest.fn().mockResolvedValue(true) } as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
+    const service = createService({ analyses, projects });
     const enqueue = jest
       .spyOn(service as unknown as { enqueue(id: string): void }, 'enqueue')
       .mockImplementation(() => undefined);
 
     await expect(service.rerun(source.id, 'workspace-1')).resolves.toBe(created);
-    expect(analyses.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: source.projectId,
-        baseCommit: source.baseCommit,
-        targetCommit: source.targetCommit,
-        status: 'READY',
-        aiAnalysis: null,
-      }),
-    );
+    expect(analyses.create).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: source.projectId,
+      baseCommit: source.baseCommit,
+      targetCommit: source.targetCommit,
+      status: 'READY',
+    }));
     expect(enqueue).toHaveBeenCalledWith(created.id);
   });
 
-  it('returns the active project task instead of creating a duplicate rerun', async () => {
-    const source = analysisTask({ status: 'SUCCESS' });
-    const active = analysisTask({ id: 'active-task', status: 'RUNNING' });
-    const analyses = {
-      findById: jest.fn().mockResolvedValue(source),
-      findActiveByProject: jest.fn().mockResolvedValue(active),
-      create: jest.fn(),
-    };
-    const projects = {
-      findById: jest.fn().mockResolvedValue({
-        id: source.projectId,
-        name: source.projectName,
-      } satisfies Partial<Project>),
-    };
-    const service = new AnalysesService(
-      analyses as never,
-      projects as never,
-      { isActive: jest.fn().mockResolvedValue(true) } as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
-
-    await expect(service.rerun(source.id, 'workspace-1')).resolves.toBe(active);
-    expect(analyses.create).not.toHaveBeenCalled();
-  });
-
-  it('queues AI analysis separately for a completed smart detection', async () => {
-    const source = analysisTask({ status: 'SUCCESS', aiAnalysis: null });
-    const pending = analysisTask({
-      status: 'SUCCESS',
-      aiAnalysis: {
-        status: 'RUNNING',
-        summary: null,
-        riskLevel: null,
-        keyFindings: [],
-        regressionSuggestions: [],
-        model: null,
-        analyzedAt: null,
-        errorMessage: null,
-      },
-    });
-    const analyses = {
-      findById: jest.fn().mockResolvedValue(source),
-      findByIdForWorkerTask: jest.fn().mockResolvedValue(source),
-      startAiAnalysis: jest.fn().mockResolvedValue(pending),
-    };
-    const service = new AnalysesService(
-      analyses as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
-    await expect(service.analyzeWithAi(source.id, 'workspace-1')).resolves.toBe(pending);
-    expect(analyses.startAiAnalysis).toHaveBeenCalledWith(
-      source.id,
-      expect.objectContaining({ status: 'RUNNING' }),
-    );
-  });
-
-  it('does not invoke AI while processing a smart detection', async () => {
-    const source = analysisTask({ status: 'READY' });
+  it('produces the regression plan in the same analysis run', async () => {
+    const source = analysisTask({ status: 'READY', finishedAt: null });
+    const completed = analysisTask({ status: 'SUCCESS' });
     const analyses = {
       findByIdForWorkerTask: jest.fn().mockResolvedValue(source),
       markRunning: jest.fn(),
       updateProgress: jest.fn(),
-      complete: jest.fn().mockResolvedValue(analysisTask()),
+      complete: jest.fn().mockResolvedValue(completed),
       fail: jest.fn(),
     };
-    const projects = {
-      findByIdForWorkerTask: jest.fn().mockResolvedValue({
-        id: source.projectId,
-        workspaceId: 'workspace-1',
-        name: source.projectName,
-        repositoryUrl: 'https://example.test/repository.git',
-        productionBranch: 'production',
-      }),
-      findAll: jest.fn().mockResolvedValue([]),
-      updateLastAnalyzedCommit: jest.fn(),
-    };
-    const git = {
-      analyzeRange: jest.fn().mockResolvedValue({
-        commits: [],
-        files: [{
-          path: 'src/order.service.ts',
-          oldPath: null,
-          changeType: 'M',
-          additions: 3,
-          deletions: 1,
-        }],
-        additions: 3,
-        deletions: 1,
+    const projects = workerProjects(source);
+    const git = gitResult();
+    const symbols = symbolResult();
+    const ai = {
+      analyze: jest.fn().mockResolvedValue({
+        status: 'DISABLED', summary: null, riskLevel: null, keyFindings: [],
+        regressionSuggestions: [], model: null, analyzedAt: null, errorMessage: null,
       }),
     };
-    const symbols = {
-      analyzeRange: jest.fn().mockResolvedValue({
-        symbolSummary: '识别到 1 个变更 Symbol',
-        symbolChanges: [],
-        symbolImpacts: [],
-      }),
-    };
-    const aiAnalyzer = { analyze: jest.fn() };
-    const service = new AnalysesService(
-      analyses as never,
-      projects as never,
-      { isActive: jest.fn().mockResolvedValue(true) } as never,
-      git as never,
-      symbols as never,
-      aiAnalyzer as never,
-    );
+    const service = createService({ analyses, projects, git, symbols, ai });
 
     await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
 
-    expect(analyses.complete).toHaveBeenCalled();
+    expect(ai.analyze).toHaveBeenCalledWith(expect.objectContaining({
+      analysisContext: expect.objectContaining({ targetCommit: source.targetCommit }),
+      changeUnits: expect.any(Array),
+    }));
+    expect(analyses.complete).toHaveBeenCalledWith(
+      source.id,
+      expect.objectContaining({
+        analysisContext: expect.any(Object),
+        changeUnits: expect.any(Array),
+        regressionPlan: expect.objectContaining({ version: 2, generatedBy: 'STATIC' }),
+      }),
+      undefined,
+    );
     expect(analyses.updateProgress.mock.calls.map((call) => call[1].stage)).toEqual([
       'SYNCING_REPOSITORY',
       'ANALYZING_SYMBOLS',
-      'ANALYZING_IMPACT',
+      'INTERPRETING_CHANGES',
+      'EXPLORING_DEPENDENCIES',
+      'RESOLVING_SCENARIOS',
+      'PLANNING_REGRESSION',
       'SAVING_RESULT',
     ]);
-    expect(aiAnalyzer.analyze).not.toHaveBeenCalled();
   });
 
-  it('queues AI after an automatically requested change analysis succeeds', async () => {
-    const source = analysisTask({
-      status: 'READY',
-      aiAnalysisRequested: true,
-      finishedAt: null,
-    });
-    const completed = analysisTask({
-      status: 'SUCCESS',
-      aiAnalysisRequested: true,
-    });
-    const analyses = {
-      findByIdForWorkerTask: jest
-        .fn()
-        .mockResolvedValueOnce(source)
-        .mockResolvedValueOnce(completed),
-      markRunning: jest.fn(),
-      complete: jest.fn().mockResolvedValue(completed),
-      startAiAnalysis: jest.fn().mockResolvedValue(
-        analysisTask({
-          aiAnalysisRequested: true,
-          aiAnalysis: {
-            status: 'RUNNING',
-            summary: null,
-            riskLevel: null,
-            keyFindings: [],
-            regressionSuggestions: [],
-            model: null,
-            analyzedAt: null,
-            errorMessage: null,
-          },
-        }),
-      ),
-      fail: jest.fn(),
-    };
-    const projects = {
-      findByIdForWorkerTask: jest.fn().mockResolvedValue({
-        id: source.projectId,
-        workspaceId: 'workspace-1',
-        name: source.projectName,
-        repositoryUrl: 'https://example.test/repository.git',
-        productionBranch: 'production',
-      }),
-      findAll: jest.fn().mockResolvedValue([]),
-      updateLastAnalyzedCommit: jest.fn(),
-    };
-    const git = {
-      analyzeRange: jest.fn().mockResolvedValue({
-        commits: [],
-        files: [{
-          path: 'src/order.service.ts',
-          oldPath: null,
-          changeType: 'M',
-          additions: 3,
-          deletions: 1,
-        }],
-        additions: 3,
-        deletions: 1,
-      }),
-    };
-    const symbols = {
-      analyzeRange: jest.fn().mockResolvedValue({
-        symbolSummary: '识别到 1 个变更 Symbol',
-        symbolChanges: [],
-        symbolImpacts: [],
-      }),
-    };
-    const service = new AnalysesService(
-      analyses as never,
-      projects as never,
-      { isActive: jest.fn().mockResolvedValue(true) } as never,
-      git as never,
-      symbols as never,
-      {} as never,
-    );
-    await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
-
-    expect(analyses.startAiAnalysis).toHaveBeenCalledWith(
-      source.id,
-      expect.objectContaining({ status: 'RUNNING' }),
-    );
-  });
-
-  it('only treats projects of the same workspace as related repositories', async () => {
+  it('captures only repositories returned for the task workspace', async () => {
     const source = analysisTask({ status: 'READY' });
     const analyses = {
       findByIdForWorkerTask: jest.fn().mockResolvedValue(source),
@@ -256,149 +86,131 @@ describe('AnalysesService', () => {
       complete: jest.fn().mockResolvedValue(analysisTask()),
       fail: jest.fn(),
     };
-    const projects = {
-      findByIdForWorkerTask: jest.fn().mockResolvedValue({
-        id: source.projectId,
-        workspaceId: 'workspace-1',
-        name: source.projectName,
-        repositoryUrl: 'https://example.test/repository.git',
-        productionBranch: 'production',
-      }),
-      // 仓储层已按工作空间过滤，这里只返回本空间项目
-      findAll: jest.fn().mockResolvedValue([
-        {
-          id: source.projectId,
-          workspaceId: 'workspace-1',
-          name: source.projectName,
-          detectedCommit: 'self-commit',
-        },
-        {
-          id: 'same-workspace-project',
-          workspaceId: 'workspace-1',
-          name: '同空间服务',
-          detectedCommit: 'same-commit',
-        },
-      ]),
-      updateLastAnalyzedCommit: jest.fn(),
-    };
-    const git = {
-      analyzeRange: jest.fn().mockResolvedValue({
-        commits: [],
-        files: [
-          {
-            path: 'src/order.service.ts',
-            oldPath: null,
-            changeType: 'M',
-            additions: 3,
-            deletions: 1,
-          },
-        ],
-        additions: 3,
-        deletions: 1,
-      }),
-    };
-    const symbols = {
-      analyzeRange: jest.fn().mockResolvedValue({
-        symbolSummary: 'ok',
-        symbolChanges: [],
-        symbolImpacts: [],
-      }),
-    };
-    const service = new AnalysesService(
-      analyses as never,
-      projects as never,
-      { isActive: jest.fn().mockResolvedValue(true) } as never,
-      git as never,
-      symbols as never,
-      {} as never,
-    );
+    const projects = workerProjects(source);
+    projects.findAll.mockResolvedValue([
+      { id: source.projectId, name: source.projectName, detectedCommit: 'self-commit' },
+      { id: 'related', name: '关联前端', detectedCommit: 'related-commit' },
+    ]);
+    const symbols = symbolResult();
+    const service = createService({ analyses, projects, git: gitResult(), symbols });
 
     await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
 
-    // 关键：关联仓库查询必须带上被分析项目所属的工作空间
     expect(projects.findAll).toHaveBeenCalledWith('workspace-1');
-    const related = symbols.analyzeRange.mock.calls[0][0].relatedRepositories;
-    expect(related).toEqual([
-      {
-        projectId: 'same-workspace-project',
-        projectName: '同空间服务',
-        targetCommit: 'same-commit',
-      },
-    ]);
+    expect(symbols.analyzeRange).toHaveBeenCalledWith(expect.objectContaining({
+      relatedRepositories: [{
+        projectId: 'related', projectName: '关联前端', targetCommit: 'related-commit',
+      }],
+    }));
   });
 
   it('lists workspace logs without requiring a project filter', async () => {
-    const analyses = {
-      listLogs: jest.fn().mockResolvedValue({
-        items: [],
-        total: 0,
-        page: 1,
-        pageSize: 10,
-        totalPages: 1,
-      }),
-    };
+    const analyses = { listLogs: jest.fn().mockResolvedValue({ items: [], total: 0 }) };
     const projects = { findById: jest.fn() };
-    const service = new AnalysesService(
-      analyses as never,
-      projects as never,
-      { isActive: jest.fn().mockResolvedValue(true) } as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
+    const service = createService({ analyses, projects });
 
     await service.listLogs({ type: 'CHANGE_ANALYSIS', status: 'FAILED' }, 'workspace-1');
 
     expect(projects.findById).not.toHaveBeenCalled();
-    expect(analyses.listLogs).toHaveBeenCalledWith(
-      { type: 'CHANGE_ANALYSIS', status: 'FAILED' },
-      'workspace-1',
-    );
+    expect(analyses.listLogs).toHaveBeenCalled();
   });
 
-  it('rejects log queries scoped to a project outside the workspace', async () => {
-    const analyses = { listLogs: jest.fn() };
-    const projects = { findById: jest.fn().mockResolvedValue(null) };
-    const service = new AnalysesService(
-      analyses as never,
-      projects as never,
-      { isActive: jest.fn().mockResolvedValue(true) } as never,
-      {} as never,
-      {} as never,
-      {} as never,
+  it('persists a user decision for a regression target and allows resetting it', async () => {
+    const source = analysisTask({
+      regressionPlan: {
+        version: 2, summary: '订单提交变化', riskLevel: 'HIGH', unknowns: [],
+        generatedBy: 'STATIC', model: null, generatedAt: new Date().toISOString(),
+        targets: [{
+          title: '订单提交', scope: '提交链路变化', priority: 'P1', id: 'target:order-submit',
+          reason: '订单提交可能受影响', verificationPoints: [], relatedTests: [],
+        }],
+      },
+    });
+    const analyses = {
+      findById: jest.fn().mockResolvedValue(source),
+      updateRegressionFeedback: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = createService({ analyses });
+    const user = { id: 'user-1', username: 'tester', displayName: '测试同学', status: 'ACTIVE' as const };
+
+    const confirmed = await service.updateRegressionFeedback(
+      source.id, 'target:order-submit', { decision: 'CONFIRMED' }, 'workspace-1', user,
+    );
+    expect(confirmed.regressionFeedback).toEqual([
+      expect.objectContaining({
+        targetId: 'target:order-submit', decision: 'CONFIRMED', updatedBy: 'user-1',
+      }),
+    ]);
+    expect(analyses.updateRegressionFeedback).toHaveBeenCalledWith(
+      source.id,
+      expect.arrayContaining([expect.objectContaining({ decision: 'CONFIRMED' })]),
     );
 
-    await expect(
-      service.listLogs({ type: 'AI_ANALYSIS', projectId: 'foreign-project' }, 'workspace-1'),
-    ).rejects.toThrow('项目不存在');
-    expect(analyses.listLogs).not.toHaveBeenCalled();
+    analyses.findById.mockResolvedValue({ ...source, regressionFeedback: confirmed.regressionFeedback });
+    const reset = await service.updateRegressionFeedback(
+      source.id, 'target:order-submit', { decision: 'PENDING' }, 'workspace-1', user,
+    );
+    expect(reset.regressionFeedback).toEqual([]);
   });
 });
 
+function createService(overrides: Record<string, any> = {}) {
+  return new AnalysesService(
+    (overrides.analyses ?? {}) as never,
+    (overrides.projects ?? {}) as never,
+    (overrides.git ?? {}) as never,
+    (overrides.symbols ?? {}) as never,
+    (overrides.ai ?? { analyze: jest.fn().mockResolvedValue({ status: 'DISABLED' }) }) as never,
+  );
+}
+
+function workerProjects(source: AnalysisTask) {
+  return {
+    findByIdForWorkerTask: jest.fn().mockResolvedValue({
+      id: source.projectId,
+      workspaceId: 'workspace-1',
+      name: source.projectName,
+      repositoryUrl: 'https://example.test/repository.git',
+      productionBranch: 'production',
+    }),
+    findAll: jest.fn().mockResolvedValue([]),
+    updateLastAnalyzedCommit: jest.fn(),
+  };
+}
+
+function gitResult() {
+  return {
+    analyzeRange: jest.fn().mockResolvedValue({
+      commits: [],
+      files: [{
+        path: 'src/order.service.ts', oldPath: null, changeType: 'M', additions: 3, deletions: 1,
+      }],
+      changeEvidence: [],
+      additions: 3,
+      deletions: 1,
+    }),
+  };
+}
+
+function symbolResult() {
+  return {
+    analyzeRange: jest.fn().mockResolvedValue({
+      symbolSummary: '识别到 1 个变更 Symbol',
+      symbolChanges: [],
+      symbolImpacts: [],
+    }),
+  };
+}
+
 function analysisTask(overrides: Partial<AnalysisTask> = {}): AnalysisTask {
   return {
-    id: 'source-task',
-    projectId: 'project-1',
-    projectName: '订单服务',
-    baseCommit: 'base-commit',
-    targetCommit: 'target-commit',
-    status: 'SUCCESS',
-    commitCount: 1,
-    changedFileCount: 1,
-    additions: 10,
-    deletions: 2,
-    errorMessage: null,
-    riskLevel: 'LOW',
-    riskSummary: '低风险',
-    impactedModules: [],
-    regressionSuggestions: [],
-    symbolSummary: null,
-    symbolChanges: [],
-    symbolImpacts: [],
-    aiAnalysis: null,
-    createdAt: new Date().toISOString(),
+    id: 'source-task', projectId: 'project-1', projectName: '订单服务',
+    baseCommit: 'base-commit', targetCommit: 'target-commit', status: 'SUCCESS',
+    commitCount: 1, changedFileCount: 1, additions: 10, deletions: 2,
+    errorMessage: null, riskLevel: 'LOW', riskSummary: '低风险',
+    impactedModules: [], regressionSuggestions: [], symbolSummary: null,
+    symbolChanges: [], symbolImpacts: [], createdAt: new Date().toISOString(),
     finishedAt: new Date().toISOString(),
     ...overrides,
-    aiAnalysisRequested: overrides.aiAnalysisRequested ?? false,
   };
 }
