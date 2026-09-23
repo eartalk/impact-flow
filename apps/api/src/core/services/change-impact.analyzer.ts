@@ -104,6 +104,7 @@ export class ChangeImpactAnalyzer {
         technicalConfidence: 'HIGH',
         businessConfidence: semantics.confidence,
         sourceSymbolKeys: [change.key],
+        traceSymbolKeys: [change.key],
         entryPoints: routes.length ? routes : [change.qualifiedName || change.name],
         evidence: [
           `${change.filePath}:${change.startLine} · ${this.changeLabel(change.changeType)} ${change.qualifiedName || change.name}`,
@@ -135,6 +136,7 @@ export class ChangeImpactAnalyzer {
         technicalConfidence: 'HIGH',
         businessConfidence: semantics.confidence,
         sourceSymbolKeys: [impact.changedSymbolKey],
+        traceSymbolKeys: impact.callChain.map((symbol) => symbol.key),
         entryPoints: routes.length ? routes : [target.qualifiedName || target.name],
         evidence: [impact.callChain.map((symbol) => symbol.qualifiedName || symbol.name).join(' → ')],
         confidence: 'HIGH',
@@ -173,6 +175,7 @@ export class ChangeImpactAnalyzer {
           technicalConfidence: impact.depth ? 'HIGH' : 'MEDIUM',
           businessConfidence: semantics.confidence === 'HIGH' ? 'MEDIUM' : semantics.confidence,
           sourceSymbolKeys: [change.key],
+          traceSymbolKeys: impact.callChain.map((symbol) => symbol.key),
           entryPoints: [target.qualifiedName || target.name],
           evidence: [impact.callChain.map((symbol) => symbol.qualifiedName || symbol.name).join(' → ')],
           confidence: impact.depth ? 'HIGH' : 'MEDIUM',
@@ -268,6 +271,10 @@ export class ChangeImpactAnalyzer {
     existing.sourceSymbolKeys = this.unique([
       ...(existing.sourceSymbolKeys ?? []),
       ...(incoming.sourceSymbolKeys ?? []),
+    ]);
+    existing.traceSymbolKeys = this.unique([
+      ...(existing.traceSymbolKeys ?? []),
+      ...(incoming.traceSymbolKeys ?? []),
     ]);
   }
 

@@ -63,7 +63,7 @@ describe('AnalysesService', () => {
       expect.objectContaining({
         analysisContext: expect.any(Object),
         changeUnits: expect.any(Array),
-        regressionPlan: expect.objectContaining({ version: 2, generatedBy: 'STATIC' }),
+        regressionPlan: expect.objectContaining({ version: 4, generatedBy: 'STATIC' }),
       }),
       undefined,
     );
@@ -102,6 +102,94 @@ describe('AnalysesService', () => {
         projectId: 'related', projectName: '关联前端', targetCommit: 'related-commit',
       }],
     }));
+  });
+
+  it('skips Symbol and AI analysis when a change contains only ordinary documentation', async () => {
+    const source = analysisTask({ status: 'READY', finishedAt: null });
+    const analyses = {
+      findByIdForWorkerTask: jest.fn().mockResolvedValue(source),
+      markRunning: jest.fn(), updateProgress: jest.fn(),
+      complete: jest.fn().mockImplementation(async (_id, result) => ({ ...source, ...result, status: 'SUCCESS' })),
+      fail: jest.fn(),
+    };
+    const projects = workerProjects(source);
+    const git = {
+      analyzeRange: jest.fn().mockResolvedValue({
+        commits: [], additions: 8, deletions: 1, changeEvidence: [],
+        files: [
+          { path: 'README.md', oldPath: null, changeType: 'M', additions: 5, deletions: 1 },
+          { path: 'docs/design.md', oldPath: null, changeType: 'M', additions: 3, deletions: 0 },
+        ],
+      }),
+    };
+    const symbols = symbolResult();
+    const ai = { analyze: jest.fn() };
+    const service = createService({ analyses, projects, git, symbols, ai });
+
+    await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
+
+    expect(symbols.analyzeRange).not.toHaveBeenCalled();
+    expect(ai.analyze).not.toHaveBeenCalled();
+    expect(analyses.complete).toHaveBeenCalledWith(
+      source.id,
+      expect.objectContaining({
+        riskLevel: 'LOW',
+        riskSummary: expect.stringContaining('无需业务回归'),
+        changeUnits: [],
+        regressionPlan: expect.objectContaining({ targets: [] }),
+        analysisContext: expect.objectContaining({
+          relevance: expect.objectContaining({ ignored: 2, businessRelevant: 0 }),
+        }),
+      }),
+      undefined,
+    );
+  });
+
+  it('sends only business-relevant files to Symbol and AI analysis for mixed changes', async () => {
+    const source = analysisTask({ status: 'READY', finishedAt: null });
+    const analyses = {
+      findByIdForWorkerTask: jest.fn().mockResolvedValue(source),
+      markRunning: jest.fn(), updateProgress: jest.fn(),
+      complete: jest.fn().mockResolvedValue(analysisTask({ status: 'SUCCESS' })),
+      fail: jest.fn(),
+    };
+    const projects = workerProjects(source);
+    const files = [
+      { path: 'README.md', oldPath: null, changeType: 'M', additions: 2, deletions: 0 },
+      { path: 'src/order.service.ts', oldPath: null, changeType: 'M', additions: 3, deletions: 1 },
+      { path: 'Dockerfile', oldPath: null, changeType: 'M', additions: 1, deletions: 1 },
+    ];
+    const git = { analyzeRange: jest.fn().mockResolvedValue({
+      commits: [], files, additions: 6, deletions: 2,
+      changeEvidence: files.map((file) => ({ filePath: file.path, oldPath: null, hunks: [] })),
+    }) };
+    const symbols = symbolResult();
+    const ai = { analyze: jest.fn().mockResolvedValue({ status: 'DISABLED' }) };
+    const service = createService({ analyses, projects, git, symbols, ai });
+
+    await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
+
+    expect(symbols.analyzeRange).toHaveBeenCalledWith(expect.objectContaining({
+      includePaths: ['src/order.service.ts'],
+    }));
+    expect(ai.analyze).toHaveBeenCalledWith(expect.objectContaining({
+      files: [expect.objectContaining({ path: 'src/order.service.ts' })],
+      additions: 3,
+      deletions: 1,
+      changeEvidence: [expect.objectContaining({ filePath: 'src/order.service.ts' })],
+    }));
+    expect(analyses.complete).toHaveBeenCalledWith(
+      source.id,
+      expect.objectContaining({
+        files,
+        analysisContext: expect.objectContaining({
+          relevance: expect.objectContaining({
+            businessRelevant: 1, technicalValidation: 1, ignored: 1,
+          }),
+        }),
+      }),
+      undefined,
+    );
   });
 
   it('lists workspace logs without requiring a project filter', async () => {

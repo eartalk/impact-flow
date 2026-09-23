@@ -30,6 +30,28 @@ export interface AnalysisRepositorySnapshot {
   role: 'CHANGED' | 'RELATED';
 }
 
+export type ChangeRelevanceClassification =
+  | 'BUSINESS_RELEVANT'
+  | 'TECHNICAL_VALIDATION'
+  | 'IGNORED'
+  | 'NEEDS_REVIEW';
+
+export interface ChangeRelevanceDecision {
+  filePath: string;
+  classification: ChangeRelevanceClassification;
+  rule: string;
+  reason: string;
+}
+
+export interface ChangeRelevanceSummary {
+  policyVersion: string;
+  businessRelevant: number;
+  technicalValidation: number;
+  ignored: number;
+  needsReview: number;
+  decisions: ChangeRelevanceDecision[];
+}
+
 /** 一次分析使用的不可变输入版本。历史结果只能使用该快照解释。 */
 export interface AnalysisContextSnapshot {
   baseCommit: string;
@@ -37,6 +59,7 @@ export interface AnalysisContextSnapshot {
   repositories: AnalysisRepositorySnapshot[];
   analyzerVersion: string;
   capturedAt: string;
+  relevance?: ChangeRelevanceSummary;
 }
 
 export type ChangeKind =
@@ -93,6 +116,8 @@ export interface RegressionSuggestion {
   businessConfidence?: 'HIGH' | 'MEDIUM' | 'LOW';
   /** 被该业务范围覆盖的原始变更 Symbol，用于计算覆盖率。 */
   sourceSymbolKeys?: string[];
+  /** 从原始变更到业务边界经过的 Symbol，用于跨候选识别同一调用关系。 */
+  traceSymbolKeys?: string[];
   entryPoints?: string[];
   scenarios?: string[];
   steps?: string[];

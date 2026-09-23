@@ -30,6 +30,7 @@ import type {
 } from '@impact-flow/contracts';
 import { ChangeInterpreter } from '../../core/services/change-interpreter';
 import { RegressionPlanner } from '../../core/services/regression-planner';
+import { ChangeRelevancePolicy } from '../../core/services/change-relevance.policy';
 
 @Injectable()
 export class AnalysesService {
@@ -37,6 +38,7 @@ export class AnalysesService {
   private readonly impactAnalyzer = new ChangeImpactAnalyzer();
   private readonly changeInterpreter = new ChangeInterpreter();
   private readonly regressionPlanner = new RegressionPlanner();
+  private readonly relevancePolicy = new ChangeRelevancePolicy();
 
   constructor(
     @Inject(ANALYSIS_REPOSITORY)
@@ -224,7 +226,19 @@ export class AnalysesService {
             '代码仓库已就绪，正在计算版本差异',
             workerId,
           ),
-      });
+        });
+      const relevance = this.relevancePolicy.evaluate(result.files);
+      const analysisPaths = new Set(
+        relevance.analysisFiles.flatMap((file) => [file.path, file.oldPath])
+          .filter((path): path is string => Boolean(path))
+          .map((path) => this.normalizePath(path)),
+      );
+      const analysisEvidence = result.changeEvidence.filter((evidence) =>
+        analysisPaths.has(this.normalizePath(evidence.filePath)) ||
+        (evidence.oldPath && analysisPaths.has(this.normalizePath(evidence.oldPath))),
+      );
+      const analysisAdditions = relevance.analysisFiles.reduce((total, file) => total + file.additions, 0);
+      const analysisDeletions = relevance.analysisFiles.reduce((total, file) => total + file.deletions, 0);
       const relatedProjects = (await this.projects.findAll(project.workspaceId))
         .filter((item) => item.id !== project.id && item.detectedCommit);
       const relatedRepositories = relatedProjects.map((item) => ({
@@ -233,13 +247,20 @@ export class AnalysesService {
         targetCommit: item.detectedCommit!,
       }));
       let symbolAnalysis;
-      try {
+      if (!relevance.analysisFiles.length) {
+        symbolAnalysis = {
+          symbolSummary: '变更相关性过滤后没有需要执行 Symbol 分析的业务文件',
+          symbolChanges: [],
+          symbolImpacts: [],
+        };
+      } else try {
         await this.updateProgress(task.id, 'ANALYZING_SYMBOLS', 55, '正在分析 Symbol 变更与调用链', workerId);
         symbolAnalysis = await this.symbols.analyzeRange({
           projectId: project.id,
           projectName: project.name,
           baseCommit: task.baseCommit,
           targetCommit: task.targetCommit,
+          includePaths: [...analysisPaths],
           relatedRepositories,
         });
       } catch (error) {
@@ -254,7 +275,7 @@ export class AnalysesService {
       await this.updateProgress(task.id, 'INTERPRETING_CHANGES', 66, '正在理解每项代码变更的语义', workerId);
       const changeUnits = this.changeInterpreter.interpret(
         symbolAnalysis.symbolChanges,
-        result.files,
+        relevance.analysisFiles,
       );
       const analysisContext = {
         baseCommit: task.baseCommit,
@@ -275,30 +296,44 @@ export class AnalysesService {
         ],
         analyzerVersion: 'regression-intelligence-v2',
         capturedAt: new Date().toISOString(),
+        relevance: relevance.summary,
       };
       await this.updateProgress(task.id, 'EXPLORING_DEPENDENCIES', 74, '正在沿调用链查找业务入口与关联测试', workerId);
-      const impact = this.impactAnalyzer.analyze({
-        ...result,
-        ...symbolAnalysis,
-      });
+      const impact = relevance.analysisFiles.length
+        ? this.impactAnalyzer.analyze({
+            files: relevance.analysisFiles,
+            additions: analysisAdditions,
+            deletions: analysisDeletions,
+            ...symbolAnalysis,
+          })
+        : {
+            riskLevel: 'LOW' as const,
+            riskSummary: '',
+            impactedModules: [],
+            regressionSuggestions: [],
+          };
+      const impactSummary = this.relevanceSummary(
+        impact.riskSummary,
+        relevance.summary,
+      );
       await this.updateProgress(task.id, 'RESOLVING_SCENARIOS', 82, '正在把技术影响翻译为可回归的业务场景', workerId);
       let aiAnalysis = null;
-      try {
+      if (relevance.analysisFiles.length) try {
         aiAnalysis = await this.aiAnalyzer.analyze({
           workspaceId: project.workspaceId,
           projectName: project.name,
           baseCommit: task.baseCommit,
           targetCommit: task.targetCommit,
           commits: result.commits,
-          files: result.files,
-          additions: result.additions,
-          deletions: result.deletions,
-          changeEvidence: result.changeEvidence,
+          files: relevance.analysisFiles,
+          additions: analysisAdditions,
+          deletions: analysisDeletions,
+          changeEvidence: analysisEvidence,
           analysisContext,
           changeUnits,
           ruleAnalysis: {
             riskLevel: impact.riskLevel,
-            riskSummary: impact.riskSummary,
+            riskSummary: impactSummary,
             impactedModules: impact.impactedModules,
             regressionSuggestions: impact.regressionSuggestions,
           },
@@ -311,18 +346,23 @@ export class AnalysesService {
       }
       await this.updateProgress(task.id, 'PLANNING_REGRESSION', 88, '正在生成按优先级排序的回归清单', workerId);
       const regressionPlan = this.regressionPlanner.plan({
-        summary: impact.riskSummary,
+        summary: impactSummary,
         riskLevel: impact.riskLevel,
         changeUnits,
-        ruleSuggestions: impact.regressionSuggestions,
+        ruleSuggestions: [
+          ...impact.regressionSuggestions,
+          ...relevance.technicalSuggestions,
+        ],
         aiAnalysis,
       });
       await this.updateProgress(task.id, 'SAVING_RESULT', 90, '分析已完成，正在保存结果', workerId);
       const completed = await this.analyses.complete(task.id, {
         ...result,
         ...impact,
+        riskSummary: impactSummary,
         regressionSuggestions: regressionPlan.targets,
         ...symbolAnalysis,
+        changeEvidence: analysisEvidence,
         analysisContext,
         changeUnits,
         regressionPlan,
@@ -340,6 +380,29 @@ export class AnalysesService {
       await this.analyses.fail(task.id, message);
       this.logger.error(`分析任务 ${task.id} 执行失败：${message}`);
     }
+  }
+
+  private relevanceSummary(
+    impactSummary: string,
+    relevance: import('@impact-flow/contracts').ChangeRelevanceSummary,
+  ) {
+    const analyzed = relevance.businessRelevant + relevance.needsReview;
+    if (!analyzed && !relevance.technicalValidation) {
+      return `本次仅包含 ${relevance.ignored} 个文档、生成文件或开发辅助文件，无需业务回归。`;
+    }
+    if (!analyzed) {
+      return `本次未发现业务运行代码变化；${relevance.technicalValidation} 个文件需要完成技术验证，${relevance.ignored} 个文件已忽略。`;
+    }
+    const details = [
+      relevance.ignored ? `忽略 ${relevance.ignored} 个非运行时文件` : null,
+      relevance.technicalValidation ? `${relevance.technicalValidation} 个文件转为技术验证` : null,
+      relevance.needsReview ? `${relevance.needsReview} 个未知文件保守纳入分析` : null,
+    ].filter(Boolean);
+    return details.length ? `${impactSummary}（${details.join('，')}）` : impactSummary;
+  }
+
+  private normalizePath(path: string) {
+    return path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
   }
 
   private async updateProgress(

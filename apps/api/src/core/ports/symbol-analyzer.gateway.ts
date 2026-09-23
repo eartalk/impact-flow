@@ -17,6 +17,7 @@ export interface SymbolAnalyzerGateway {
     projectName: string;
     baseCommit: string;
     targetCommit: string;
+    includePaths?: string[];
     relatedRepositories?: Array<{
       projectId: string;
       projectName: string;

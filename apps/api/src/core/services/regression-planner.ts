@@ -7,11 +7,14 @@ import type {
   RegressionTarget,
   RiskLevel,
 } from '@impact-flow/contracts';
+import { RegressionScenarioMerger } from './regression-scenario.merger';
 
 type Priority = RegressionSuggestion['priority'];
 
 /** 回归清单是唯一最终产物；候选来源不能直接决定最终优先级和表述。 */
 export class RegressionPlanner {
+  private readonly scenarioMerger = new RegressionScenarioMerger();
+
   plan(input: {
     summary: string;
     riskLevel: RiskLevel;
@@ -19,7 +22,7 @@ export class RegressionPlanner {
     ruleSuggestions: RegressionSuggestion[];
     aiAnalysis?: AiAnalysisResult | null;
   }): RegressionPlan {
-    const candidates = this.mergeCandidates([
+    const candidates = this.scenarioMerger.merge([
       ...input.ruleSuggestions,
       ...(input.aiAnalysis?.status === 'SUCCESS'
         ? input.aiAnalysis.regressionSuggestions
@@ -44,7 +47,7 @@ export class RegressionPlanner {
     ].slice(0, 20);
 
     return {
-      version: 2,
+      version: 4,
       summary: input.aiAnalysis?.status === 'SUCCESS' && input.aiAnalysis.summary
         ? input.aiAnalysis.summary
         : input.summary,
@@ -55,37 +58,6 @@ export class RegressionPlanner {
       model: input.aiAnalysis?.status === 'SUCCESS' ? input.aiAnalysis.model : null,
       generatedAt: new Date().toISOString(),
     };
-  }
-
-  /** 同一入口的静态候选与 AI 候选要合并证据，而不是用其中一个覆盖另一个。 */
-  private mergeCandidates(items: RegressionSuggestion[]) {
-    const merged = new Map<string, RegressionSuggestion>();
-    for (const item of items) {
-      const key = this.candidateKey(item);
-      const previous = merged.get(key);
-      if (!previous) {
-        merged.set(key, { ...item });
-        continue;
-      }
-      const richer = this.richness(item) > this.richness(previous) ? item : previous;
-      merged.set(key, {
-        ...previous,
-        ...richer,
-        entryPoints: this.unique([...(previous.entryPoints ?? []), ...(item.entryPoints ?? [])]),
-        evidence: this.unique([...(previous.evidence ?? []), ...(item.evidence ?? [])]),
-        sourceSymbolKeys: this.unique([...(previous.sourceSymbolKeys ?? []), ...(item.sourceSymbolKeys ?? [])]),
-        scenarios: this.unique([...(previous.scenarios ?? []), ...(item.scenarios ?? [])]),
-        steps: this.unique([...(previous.steps ?? []), ...(item.steps ?? [])]),
-        expectedResults: this.unique([...(previous.expectedResults ?? []), ...(item.expectedResults ?? [])]),
-        confidence: this.confidenceRank(previous.confidence) >= this.confidenceRank(item.confidence)
-          ? previous.confidence
-          : item.confidence,
-        technicalConfidence: this.strongerConfidence(previous.technicalConfidence, item.technicalConfidence),
-        businessConfidence: this.strongerConfidence(previous.businessConfidence, item.businessConfidence),
-        coverageStatus: this.strongerCoverage(previous.coverageStatus, item.coverageStatus),
-      });
-    }
-    return [...merged.values()];
   }
 
   private toTarget(item: RegressionSuggestion, allUnits: ChangeUnit[], index: number): RegressionTarget {
@@ -242,8 +214,10 @@ export class RegressionPlanner {
 
   private calibratePriority(item: RegressionSuggestion, units: ChangeUnit[]): Priority {
     const confidence = item.businessConfidence ?? item.confidence;
-    if (item.coverageStatus === 'NEEDS_REVIEW' || confidence === 'LOW' ||
-        ['TECHNICAL', 'UNKNOWN'].includes(item.boundaryType ?? '')) return 'P2';
+    if (item.coverageStatus === 'NEEDS_REVIEW' || confidence === 'LOW') return 'P2';
+    // 技术验证项的优先级来自确定性规则（依赖、交付链路等），不应因缺少业务 Symbol 被降级。
+    if (item.boundaryType === 'TECHNICAL') return item.priority;
+    if (item.boundaryType === 'UNKNOWN') return 'P2';
     const target = `${item.businessScenario ?? ''} ${item.title} ${(item.entryPoints ?? []).join(' ')}`.toLowerCase();
     const criticalAction = /(payment|billing|permission|auth|approve.?result|callback|migration|支付|计费|权限|鉴权|审批结果|状态回写|回调|数据迁移)/.test(target);
     const highEvidence = units.some((unit) =>
@@ -264,34 +238,8 @@ export class RegressionPlanner {
     return original === 'LOW' ? 'LOW' : 'MEDIUM';
   }
 
-  private candidateKey(item: RegressionSuggestion) {
-    const entries = [...(item.entryPoints ?? [])].map((value) => value.toLowerCase()).sort();
-    return entries.length
-      ? `${item.targetType ?? ''}|${entries.join('|')}`
-      : `${item.targetType ?? ''}|${item.businessScenario ?? item.title}`.toLowerCase();
-  }
-
-  private richness(item: RegressionSuggestion) {
-    return (item.scope?.length ?? 0) + (item.scenarios?.length ?? 0) * 20 +
-      (item.expectedResults?.length ?? 0) * 20 + (item.evidence?.length ?? 0) * 10;
-  }
-
   private priorityRank(value: Priority) { return value === 'P0' ? 0 : value === 'P1' ? 1 : 2; }
   private confidenceRank(value?: RegressionSuggestion['confidence']) { return value === 'HIGH' ? 3 : value === 'MEDIUM' ? 2 : 1; }
-  private strongerConfidence(
-    left?: RegressionSuggestion['technicalConfidence'],
-    right?: RegressionSuggestion['technicalConfidence'],
-  ) {
-    return this.confidenceRank(left) >= this.confidenceRank(right) ? left : right;
-  }
-  private strongerCoverage(
-    left?: RegressionSuggestion['coverageStatus'],
-    right?: RegressionSuggestion['coverageStatus'],
-  ) {
-    const rank = (value?: RegressionSuggestion['coverageStatus']) =>
-      value === 'CONFIRMED' ? 3 : value === 'RECOMMENDED' ? 2 : 1;
-    return rank(left) >= rank(right) ? left : right;
-  }
   private unique(items: string[]) { return [...new Set(items.filter(Boolean))]; }
   private slug(value: string) {
     return value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);

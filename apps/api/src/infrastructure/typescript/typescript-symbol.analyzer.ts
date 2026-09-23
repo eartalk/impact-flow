@@ -76,6 +76,7 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
     projectName: string;
     baseCommit: string;
     targetCommit: string;
+    includePaths?: string[];
     relatedRepositories?: Array<{
       projectId: string;
       projectName: string;
@@ -94,7 +95,14 @@ export class TypeScriptSymbolAnalyzer implements SymbolAnalyzerGateway {
       '*.tsx',
       '*.vue',
     ]);
-    const diffs = this.parseDiff(patch);
+    const includedPaths = input.includePaths?.length
+      ? new Set(input.includePaths.map((path) => this.normalizePath(path)))
+      : null;
+    const diffs = this.parseDiff(patch).filter((item) =>
+      !includedPaths ||
+      (item.newPath && includedPaths.has(this.normalizePath(item.newPath))) ||
+      (item.oldPath && includedPaths.has(this.normalizePath(item.oldPath))),
+    );
     if (!diffs.length) return this.emptyResult();
 
     const changedTargetPaths = new Set(

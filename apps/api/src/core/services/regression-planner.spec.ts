@@ -40,7 +40,7 @@ describe('RegressionPlanner', () => {
       ruleSuggestions: [suggestion()],
     });
 
-    expect(plan.version).toBe(2);
+    expect(plan.version).toBe(4);
     expect(plan.targets[0]).toEqual(expect.objectContaining({
       title: '订单提交',
       priority: 'P1',
@@ -155,5 +155,133 @@ describe('RegressionPlanner', () => {
       expect.stringContaining('尚未追踪到可靠业务边界'),
     ]));
     expect(plan.targets[0]?.automatedTestRecommendations).toEqual([]);
+  });
+
+  it('keeps deterministic technical validation priority without requiring business symbols', () => {
+    const plan = new RegressionPlanner().plan({
+      summary: '依赖变化', riskLevel: 'LOW', changeUnits: [],
+      ruleSuggestions: [suggestion({
+        title: '依赖安装与构建验证', priority: 'P1', targetType: 'CONFIG',
+        boundaryType: 'TECHNICAL', coverageStatus: 'RECOMMENDED',
+        confidence: 'HIGH', businessConfidence: 'HIGH', sourceSymbolKeys: [],
+        entryPoints: ['pnpm-lock.yaml'], evidence: ['pnpm-lock.yaml：依赖变化'],
+      })],
+    });
+
+    expect(plan.targets[0]?.priority).toBe('P1');
+    expect(plan.unknowns).toEqual([]);
+  });
+
+  it('absorbs a related technical path into its business boundary instead of creating a duplicate card', () => {
+    const plan = new RegressionPlanner().plan({
+      summary: '工期管理查询发生变化',
+      riskLevel: 'HIGH',
+      changeUnits: [
+        unit({ id: 'dao', symbolKey: 'dao-query', title: 'ProjectScheduleQueryDao' }),
+        unit({ id: 'api', symbolKey: 'list-api', title: 'ScheduleController.list' }),
+      ],
+      ruleSuggestions: [
+        suggestion({
+          title: '工期管理查询', businessDomain: '工期管理', businessScenario: '工期管理查询',
+          targetType: 'SYMBOL', boundaryType: 'TECHNICAL', coverageStatus: 'RECOMMENDED',
+          businessConfidence: 'MEDIUM', sourceSymbolKeys: ['dao-query'],
+          traceSymbolKeys: ['dao-query', 'schedule-service'],
+          entryPoints: ['ProjectScheduleQueryDao', 'ProjectScheduleModifiedLogEntity.mediaList'],
+          evidence: ['ProjectScheduleQueryDao → ProjectScheduleModifiedLogEntity.mediaList'],
+        }),
+        suggestion({
+          title: '工期管理查询', businessDomain: '工期管理', businessScenario: '工期管理查询',
+          entryPoints: ['POST /project-schedule/modified/list'], sourceSymbolKeys: ['list-api'],
+          traceSymbolKeys: ['schedule-controller', 'schedule-service'],
+          evidence: ['ScheduleController.list → ScheduleService.query'],
+        }),
+      ],
+    });
+
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.targets[0]).toEqual(expect.objectContaining({
+      title: '工期管理查询',
+      targetType: 'API',
+      boundaryType: 'HTTP',
+      entryPoints: ['POST /project-schedule/modified/list'],
+      sourceSymbolKeys: expect.arrayContaining(['dao-query', 'list-api']),
+      traceSymbolKeys: expect.arrayContaining(['schedule-service']),
+    }));
+    expect(plan.targets[0]?.evidence).toEqual(expect.arrayContaining([
+      '内部调用：ProjectScheduleQueryDao',
+      '内部调用：ProjectScheduleModifiedLogEntity.mediaList',
+    ]));
+    expect(plan.targets[0]?.automatedTestRecommendations).toHaveLength(1);
+  });
+
+  it('does not merge equal titles when their business scenario identity differs', () => {
+    const plan = new RegressionPlanner().plan({
+      summary: '多个项目的查询发生变化', riskLevel: 'MEDIUM', changeUnits: [],
+      ruleSuggestions: [
+        suggestion({
+          title: '列表查询', businessDomain: '工期管理', businessScenario: '工期管理查询',
+          entryPoints: ['POST /project-schedule/modified/list'],
+        }),
+        suggestion({
+          title: '列表查询', businessDomain: '工地问题', businessScenario: '工地问题查询',
+          entryPoints: ['POST /site-issues/list'],
+        }),
+      ],
+    });
+
+    expect(plan.targets).toHaveLength(2);
+  });
+
+  it('absorbs a same-scenario unmapped source file into the only confirmed business boundary', () => {
+    const plan = new RegressionPlanner().plan({
+      summary: '工期管理查询发生变化', riskLevel: 'HIGH', changeUnits: [],
+      ruleSuggestions: [
+        suggestion({
+          title: '工期管理查询', businessDomain: '工期管理', businessScenario: '工期管理查询',
+          targetType: 'SYMBOL', boundaryType: 'UNKNOWN', coverageStatus: 'NEEDS_REVIEW',
+          businessConfidence: 'MEDIUM', confidence: 'LOW', sourceSymbolKeys: [],
+          entryPoints: [
+            'src/modules/bgw/project/service/project-schedule-query.service.ts',
+            'src/modules/bgw/project/types/project-schedule-query.type.ts',
+          ],
+          evidence: ['两个源码文件未映射到 Symbol 边界'],
+        }),
+        suggestion({
+          title: '工期管理查询', businessDomain: '工期管理', businessScenario: '工期管理查询',
+          entryPoints: ['POST /project-schedule/modified/list'],
+        }),
+      ],
+    });
+
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.targets[0]).toEqual(expect.objectContaining({
+      priority: 'P1',
+      boundaryType: 'HTTP',
+      coverageStatus: 'CONFIRMED',
+      entryPoints: ['POST /project-schedule/modified/list'],
+    }));
+    expect(plan.targets[0]?.evidence).toEqual(expect.arrayContaining([
+      expect.stringContaining('未映射文件：src/modules/bgw/project/service/project-schedule-query.service.ts'),
+      expect.stringContaining('调用关系待确认'),
+    ]));
+  });
+
+  it('keeps an unknown candidate separate when it is not a source-file fallback', () => {
+    const plan = new RegressionPlanner().plan({
+      summary: '工期管理查询发生变化', riskLevel: 'MEDIUM', changeUnits: [],
+      ruleSuggestions: [
+        suggestion({
+          title: '工期管理查询', businessDomain: '工期管理', businessScenario: '工期管理查询',
+          targetType: 'MODULE', boundaryType: 'UNKNOWN', coverageStatus: 'NEEDS_REVIEW',
+          businessConfidence: 'MEDIUM', entryPoints: ['外部数据同步模块'],
+        }),
+        suggestion({
+          title: '工期管理查询', businessDomain: '工期管理', businessScenario: '工期管理查询',
+          entryPoints: ['POST /project-schedule/modified/list'],
+        }),
+      ],
+    });
+
+    expect(plan.targets).toHaveLength(2);
   });
 });
