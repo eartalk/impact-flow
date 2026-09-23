@@ -63,7 +63,7 @@ DATABASE_PASSWORD_BASE64=base64-encoded-admin-password
 DATABASE_PASSWORD_FILE=/run/secrets/mysql-root-password
 ```
 
-数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库在原迁移基础上继续按序执行 `database/013_complete_table_column_comments.sql` 至 `database/022_add_ai_worker_reliability.sql`。迁移 015 会把历史成功投递记录回填为 `SUCCESS` 并补齐 `workspace_id`，执行前建议先备份；迁移 016 新增工作空间自动化策略表和分析任务的自动 AI 快照字段；迁移 017 会回填工作空间所有者与用户默认空间，并在工作空间成员表上建立单所有者约束，执行前同样建议先备份；迁移 018 只是把分析任务状态列的注释补上 `CANCELLED`（列类型本就是 varchar，无需改表）；迁移 019 是已经停用的邀请功能历史脚本，仅为兼容已执行过该迁移的环境而保留，新环境无需执行；迁移 020 增加 Worker 租约、重试次数和下次执行时间字段；迁移 021 增加可持久化的执行阶段、阶段进度、说明和开始时间字段；迁移 022 为 AI 分析增加独立租约、重试和逐次执行日志字段。
+数据库初始化脚本为 `database/impact_flow_schema.sql`。已有数据库按序执行迁移脚本。迁移 024 切换为最终的回归智能分析模型；迁移 025 增加用户对回归目标的确认反馈；迁移 026 删除废弃的邀请、发布壳表和系统内自动化绑定/执行模型。接口自动化测试只在回归计划中提供执行建议，不在系统内维护、绑定或执行测试用例。
 
 增量脚本需要按序号手工执行，且**必须显式指定连接字符集**，否则中文表名注释与列注释会被写成乱码（Windows 下 mysql 客户端默认不是 utf8mb4）：
 
@@ -74,7 +74,9 @@ mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/017_add_work
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/018_add_analysis_cancelled_status.sql
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/020_add_analysis_worker_reliability.sql
 mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/021_add_analysis_task_progress.sql
-mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/022_add_ai_worker_reliability.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/024_add_regression_intelligence.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/025_add_regression_feedback.sql
+mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/026_remove_obsolete_automation_and_release.sql
 ```
 
 也可以使用读取项目 `.env` 且不会在命令行暴露密码的迁移命令：
@@ -82,7 +84,9 @@ mysql -h127.0.0.1 -uroot --default-character-set=utf8mb4 < database/022_add_ai_w
 ```bash
 pnpm --filter @impact-flow/api migrate 020_add_analysis_worker_reliability.sql
 pnpm --filter @impact-flow/api migrate 021_add_analysis_task_progress.sql
-pnpm --filter @impact-flow/api migrate 022_add_ai_worker_reliability.sql
+pnpm --filter @impact-flow/api migrate 024_add_regression_intelligence.sql
+pnpm --filter @impact-flow/api migrate 025_add_regression_feedback.sql
+pnpm --filter @impact-flow/api migrate 026_remove_obsolete_automation_and_release.sql
 ```
 
 迁移 017 执行前会校验每个工作空间恰好有一个 OWNER，若存在「无 OWNER」或「多 OWNER」的异常数据会直接中止并提示人工修复，不会写入半成品结构。
@@ -153,7 +157,7 @@ pnpm --filter @impact-flow/api verify:workspace-schema
 - **统一只读**：由全局守卫 `ArchivedWorkspaceGuard` 拦截所有非 GET 请求，例外只有「撤销归档」「切换空间」「退出登录」「新建工作空间」四条。写死白名单而不是逐接口判断，是为了避免某个接口漏加而继续向归档空间写入。
 - **会话不失效**：`findSession` 允许会话指向归档空间，所以归档后所有者仍能进入只读管理页并恢复，**归档不再是只能改库才能撤销的单向门**。
 - **登录兜底**：`resolveLoginWorkspace` 优先 ACTIVE 空间，但账号没有任何 ACTIVE 空间时会回退到其归档空间，避免「唯一空间被归档后无法登录」的死锁。
-- **自动链路冻结**：已 `RUNNING` 的分析允许跑完，但归档后不再触发自动 AI 分析；定时调度器只遍历 ACTIVE 空间的项目，因此归档空间不会被继续巡检。
+- **自动链路冻结**：已 `RUNNING` 的分析允许跑完；定时调度器只遍历 ACTIVE 空间的项目，因此归档空间不会被继续巡检。
 
 私有 Codeup 仓库需要保证运行 API 的系统账号拥有对应 SSH Key，且首次连接所需的主机指纹已经加入 `known_hosts`。
 
@@ -197,7 +201,6 @@ GET  /api/analyses/logs
 GET  /api/analyses/:id
 POST /api/analyses
 POST /api/analyses/:id/rerun
-POST /api/analyses/:id/ai-analysis
 GET  /api/ai-configs
 POST /api/ai-configs
 PATCH /api/ai-configs/:id
@@ -215,7 +218,7 @@ PATCH /api/automation-config
 
 Symbol 分析支持 TypeScript、TSX 与 Vue SFC，能够识别 NestJS `@Controller` 配合 `@Get`、`@Post`、`@Put`、`@Patch`、`@Delete`、`@Head`、`@Options`、`@All` 声明的服务端路由，并将其与其他仓库中的 `fetch`、axios 及 `axios.create()` 实例调用关联。HTTP 路径中的模板表达式和 `:id` 参数会按动态路径段匹配；存在多个相同候选路由时会跳过关联，避免产生不确定的误报。
 
-AI 分析默认关闭，并与变更分析分开执行。可在“AI 配置”页维护多条 OpenAI Chat Completions 或 Anthropic Messages 兼容接口，并选择一条默认启用配置。API Key 使用 `AI_CONFIG_ENCRYPTION_KEY`（未配置时回退数据库密码材料）派生密钥加密保存，页面只返回末四位。模型接收提交摘要、文件元数据、Symbol 调用链以及受控 Git Diff 证据：最多 24 个文本文件、单文件 5000 字符、总计 40000 字符；环境文件、证书、锁文件、构建产物和疑似密钥值会被过滤或脱敏。调用失败不会影响变更分析任务完成。
+AI 是回归分析流水线中的可选增强器，不再单独创建任务。可在“AI 配置”页维护 OpenAI Chat Completions 或 Anthropic Messages 兼容接口并选择默认配置。模型只接收冻结后的仓库版本、语义变更、Symbol 调用链和受控 Git Diff 证据；环境文件、证书、锁文件、构建产物和疑似密钥值会被过滤或脱敏。未配置或调用失败时，系统仍会完成静态回归分析。
 
 基础配置中的“待检测通知”支持启停和钉钉群机器人 Webhook。巡检按生产分支第一父链统计待检测合并，发现新的待检测合并后发送通知，并通过项目与目标 Commit 去重；发送失败不会影响巡检结果，下次巡检会继续重试。Webhook 使用与 AI API Key 相同的加密材料保存，接口只返回掩码。
 
@@ -225,9 +228,9 @@ AI 分析默认关闭，并与变更分析分开执行。可在“AI 配置”�
 
 每次通知投递都会写入 `pending_notification_delivery`（成功与失败都记录），包含渠道、第几次尝试、失败错误码与原因。该表同时承担去重职责：`delivered_commit` 是只在投递成功时才写入 `<target_commit>` 的生成列，配合唯一键 `(project_id, delivered_commit)` 借助 MySQL「NULL 不参与唯一性比较」的特性，实现同一服务同一提交最多成功通知一次，而失败的尝试可以持续追加。失败原因取自钉钉返回的 `errcode`/`errmsg`，网络异常与非法地址分别归类为 `NETWORK`、`INVALID_WEBHOOK`。
 
-前端左侧的“日志管理”按页签统一展示变更分析、AI 分析与消息推送三类日志，支持按服务与结果筛选、分页与刷新。对应接口为 `GET /api/analyses/logs`（`type=CHANGE_ANALYSIS|AI_ANALYSIS`，`projectId`、`status` 均可选）和 `GET /api/pending-notification-config/logs`（`projectId`、`status` 均可选）。两个接口都强制按工作空间隔离，不传项目时返回该工作空间下的全部日志。
+前端“日志管理”统一展示回归分析与消息推送日志，支持按服务与结果筛选、分页与刷新。对应接口为 `GET /api/analyses/logs`（`type=CHANGE_ANALYSIS`）和 `GET /api/pending-notification-config/logs`。两个接口都强制按工作空间隔离。
 
-基础配置中的自动化流程提供三个工作空间级策略：自动巡检默认开启，巡检后的自动变更分析和变更分析后的自动 AI 分析默认关闭。三个步骤按顺序依赖；自动 AI 分析还要求当前工作空间存在一条默认且已启用的 AI 配置。自动 AI 意图会快照到分析任务，应用重启后可继续恢复待启动任务；手动巡检和手动分析不受这些开关影响。
+基础配置中的自动化流程提供两个工作空间级策略：自动巡检默认开启，巡检后的自动回归分析默认关闭。AI 若已配置会在同一次分析中自动增强结果，手动巡检和手动分析不受自动化开关影响。
 
 ## 验证
 
