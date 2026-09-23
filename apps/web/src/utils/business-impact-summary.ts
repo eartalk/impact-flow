@@ -147,7 +147,7 @@ function summaryKey(name: string) {
 }
 
 export function summarizeBusinessImpacts(
-  task: Pick<AnalysisTask, "regressionSuggestions" | "aiAnalysis"> | null | undefined,
+  task: Pick<AnalysisTask, "regressionSuggestions"> | null | undefined,
 ): BusinessImpactSummary {
   const groupedItems = new Map<string, BusinessImpactSummaryItem>();
   let changeCount = 0;
@@ -180,12 +180,6 @@ export function summarizeBusinessImpacts(
   for (const suggestion of task?.regressionSuggestions ?? []) {
     changeCount += 1;
     add(suggestion, "change");
-  }
-  if (task?.aiAnalysis?.status === "SUCCESS") {
-    for (const suggestion of task.aiAnalysis.regressionSuggestions ?? []) {
-      aiCount += 1;
-      add(suggestion, "ai");
-    }
   }
 
   const modules = BUSINESS_MODULES.map((module) => {

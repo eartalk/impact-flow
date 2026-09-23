@@ -2,7 +2,7 @@
 import { Connection, Delete, Edit, Plus } from "@element-plus/icons-vue";
 import { useWorkspaceContext } from "../workspace-context";
 
-const { loading, aiConfigs, aiConfigLoading, testingAiConfigId, aiConnectionResults, pendingNotificationConfig, pendingNotificationLoading, savingPendingNotification, testingPendingNotification, automationConfig, automationConfigLoading, savingAutomationConfig, form, pendingNotificationForm, automationForm, formatLogTime, setAutoInspection, setAutoChangeAnalysis, setAutoAiAnalysis, saveAutomationConfig, savePendingNotificationConfig, testPendingNotification, openCreateAiConfig, openEditAiConfig, toggleAiConfig, makeDefaultAiConfig, testAiConfig, removeAiConfig } = useWorkspaceContext();
+const { loading, aiConfigs, aiConfigLoading, testingAiConfigId, aiConnectionResults, pendingNotificationConfig, pendingNotificationLoading, savingPendingNotification, testingPendingNotification, automationConfig, automationConfigLoading, savingAutomationConfig, form, pendingNotificationForm, automationForm, formatLogTime, setAutoInspection, setAutoChangeAnalysis, saveAutomationConfig, savePendingNotificationConfig, testPendingNotification, openCreateAiConfig, openEditAiConfig, toggleAiConfig, makeDefaultAiConfig, testAiConfig, removeAiConfig } = useWorkspaceContext();
 </script>
 
 <template>
@@ -119,6 +119,7 @@ const { loading, aiConfigs, aiConfigLoading, testingAiConfigId, aiConnectionResu
             </div>
           </section>
 
+
           <section
             class="automation-config-section"
             aria-label="自动化流程配置"
@@ -216,40 +217,6 @@ const { loading, aiConfigs, aiConfigLoading, testingAiConfigId, aiConnectionResu
                   </span>
                 </article>
 
-                <span class="automation-flow-arrow">→</span>
-
-                <article
-                  class="automation-step selectable"
-                  :class="{ enabled: automationForm.autoAiAnalysisEnabled }"
-                  role="switch"
-                  tabindex="0"
-                  :aria-checked="automationForm.autoAiAnalysisEnabled"
-                  @click="
-                    setAutoAiAnalysis(!automationForm.autoAiAnalysisEnabled)
-                  "
-                  @keydown.enter.prevent="
-                    setAutoAiAnalysis(!automationForm.autoAiAnalysisEnabled)
-                  "
-                  @keydown.space.prevent="
-                    setAutoAiAnalysis(!automationForm.autoAiAnalysisEnabled)
-                  "
-                >
-                  <span class="automation-step-index">3</span>
-                  <div>
-                    <strong>自动 AI 分析</strong>
-                    <small>变更分析成功后调用默认 AI 配置</small>
-                  </div>
-                  <span
-                    class="state-toggle"
-                    :class="{ enabled: automationForm.autoAiAnalysisEnabled }"
-                  >
-                    <i></i>{{
-                      automationForm.autoAiAnalysisEnabled
-                        ? "已开启"
-                        : "未开启"
-                    }}
-                  </span>
-                </article>
               </div>
 
               <div class="automation-config-footer">

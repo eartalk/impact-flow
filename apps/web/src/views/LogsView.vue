@@ -12,7 +12,7 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
             <div>
               <h2>日志管理</h2>
               <p>
-                统一查看变更分析、AI 分析与消息推送的执行记录，可按服务与结果筛选。
+                统一查看回归分析与消息推送的执行记录，可按服务与结果筛选。
               </p>
             </div>
           </header>
@@ -25,14 +25,6 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
               @click="changeLogsTab('CHANGE_ANALYSIS')"
             >
               变更分析日志
-            </button>
-            <button
-              role="tab"
-              :aria-selected="logsTab === 'AI_ANALYSIS'"
-              :class="{ active: logsTab === 'AI_ANALYSIS' }"
-              @click="changeLogsTab('AI_ANALYSIS')"
-            >
-              AI 分析日志
             </button>
             <button
               role="tab"
@@ -89,17 +81,13 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
             v-loading="logsLoading"
           >
             <div
-              class="analysis-log-row analysis-log-head"
-              :class="{ 'is-ai': logsTab === 'AI_ANALYSIS', 'is-change': logsTab === 'CHANGE_ANALYSIS' }"
+              class="analysis-log-row analysis-log-head is-change"
             >
               <span>开始时间</span>
               <span>服务</span>
               <span>版本区间</span>
-              <span v-if="logsTab === 'AI_ANALYSIS'">尝试</span>
               <span>结果</span>
-              <span v-if="logsTab === 'CHANGE_ANALYSIS'">执行次数</span>
-              <span v-if="logsTab === 'AI_ANALYSIS'">模型</span>
-              <span v-if="logsTab === 'AI_ANALYSIS'">Token</span>
+              <span>执行次数</span>
               <span>耗时</span>
               <span>详情</span>
             </div>
@@ -107,8 +95,7 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
               <div
                 v-for="log in analysisLogs"
                 :key="log.id"
-                class="analysis-log-row"
-                :class="{ 'is-ai': logsTab === 'AI_ANALYSIS', 'is-change': logsTab === 'CHANGE_ANALYSIS' }"
+                class="analysis-log-row is-change"
               >
                 <time>{{ formatLogTime(log.startedAt) }}</time>
                 <span class="analysis-log-project" :title="log.projectName">
@@ -123,9 +110,6 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
                     shortCommit(log.targetCommit)
                   }}</code>
                 </div>
-                <span v-if="logsTab === 'AI_ANALYSIS'" class="analysis-log-attempt">
-                  第 {{ log.attempt ?? 1 }} 次
-                </span>
                 <el-tooltip
                   placement="top"
                   :disabled="!log.errorMessage"
@@ -135,20 +119,9 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
                     <i></i>{{ analysisLogStatusLabel(log.status) }}
                   </span>
                 </el-tooltip>
-                <span v-if="logsTab === 'CHANGE_ANALYSIS'" class="analysis-log-attempt">
+                <span class="analysis-log-attempt">
                   {{ log.attemptCount ?? "—" }}/{{ log.maxAttempts ?? "—" }}
                 </span>
-                <code
-                  v-if="logsTab === 'AI_ANALYSIS'"
-                  class="analysis-log-model"
-                  :title="log.model ?? ''"
-                  >{{ log.model ?? "—" }}</code
-                >
-                <span
-                  v-if="logsTab === 'AI_ANALYSIS'"
-                  class="analysis-log-token"
-                  >{{ log.tokenUsage?.total ?? "—" }}</span
-                >
                 <span>{{ formatDuration(log.durationMs) }}</span>
                 <button
                   v-if="log.errorMessage"
@@ -156,11 +129,7 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
                   @click="
                     ElMessageBox.alert(
                       log.errorMessage,
-                      `${log.projectName} · ${
-                        log.type === 'AI_ANALYSIS'
-                          ? 'AI 分析失败'
-                          : '变更分析失败'
-                      }`,
+                      `${log.projectName} · 回归分析失败`,
                       { confirmButtonText: '关闭' },
                     )
                   "
@@ -171,7 +140,7 @@ const { projects, loading, logsTab, logsLoading, logsProjectId, logsStatus, logs
               </div>
             </div>
             <div v-else-if="!logsLoading" class="inspection-log-empty">
-              暂无{{ logsTab === "AI_ANALYSIS" ? "AI 分析" : "变更分析" }}日志
+              暂无回归分析日志
             </div>
           </div>
 

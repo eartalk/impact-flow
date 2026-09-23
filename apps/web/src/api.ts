@@ -18,6 +18,7 @@ import type {
   PendingNotificationConfig,
   PendingNotificationConnectionTest,
   Project,
+  ProjectDeletionImpact,
   RepositoryConnectionTest,
   UpdateProjectInput,
   UpdateAiProviderConfigInput,
@@ -34,6 +35,7 @@ import type {
   WorkspaceCreationPolicy,
   WorkspaceMember,
   WorkspaceOverview,
+  UpdateRegressionFeedbackInput,
 } from '@impact-flow/contracts';
 
 /**
@@ -186,10 +188,17 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
-  deleteProject: (id: string) =>
-    request<{ deleted: boolean }>(`/api/projects/${id}`, {
+  getProjectDeletionImpact: (id: string) =>
+    request<ProjectDeletionImpact>(`/api/projects/${id}/deletion-impact`),
+  deleteProject: (id: string, options?: { force?: boolean; confirmation?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.force) params.set('force', 'true');
+    if (options?.confirmation) params.set('confirmation', options.confirmation);
+    const suffix = params.size ? `?${params.toString()}` : '';
+    return request<{ deleted: boolean; forced: boolean; deletedRecords: number }>(`/api/projects/${id}${suffix}`, {
       method: 'DELETE',
-    }),
+    });
+  },
   detectVersion: (projectId: string) =>
     request<VersionDetection>(`/api/projects/${projectId}/detect-version`, {
       method: 'POST',
@@ -225,10 +234,14 @@ export const api = {
     request<AnalysisTask>(`/api/analyses/${id}/rerun`, {
       method: 'POST',
     }),
-  runAiAnalysis: (id: string) =>
-    request<AnalysisTask>(`/api/analyses/${id}/ai-analysis`, {
-      method: 'POST',
-    }),
+  updateRegressionFeedback: (
+    analysisId: string,
+    targetId: string,
+    input: UpdateRegressionFeedbackInput,
+  ) => request<AnalysisTask>(
+    `/api/analyses/${analysisId}/regression-targets/${encodeURIComponent(targetId)}/feedback`,
+    { method: 'PATCH', body: JSON.stringify(input) },
+  ),
   listAnalysisLogs: (query: AnalysisLogQuery) => {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {

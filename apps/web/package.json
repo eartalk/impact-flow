@@ -14,11 +14,13 @@
     "@impact-flow/contracts": "workspace:*",
     "@vue/shared": "3.5.42",
     "element-plus": "latest",
-    "vue": "latest"
+    "vue": "latest",
+    "vue-router": "^5.3.1"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "latest",
     "typescript": "5.9.3",
+    "unplugin-vue-components": "^32.1.0",
     "vite": "latest",
     "vitest": "^5.0.1",
     "vue-tsc": "latest"

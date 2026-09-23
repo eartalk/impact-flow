@@ -11,8 +11,11 @@ const steps: Array<{ stage: AnalysisProgressStage; label: string; percent: numbe
   { stage: "QUEUED", label: "进入执行队列", percent: 5 },
   { stage: "SYNCING_REPOSITORY", label: "同步代码仓库", percent: 15 },
   { stage: "CALCULATING_DIFF", label: "计算 Git Diff", percent: 35 },
-  { stage: "ANALYZING_IMPACT", label: "评估影响与回归范围", percent: 55 },
-  { stage: "ANALYZING_SYMBOLS", label: "分析 Symbol 与调用链", percent: 75 },
+  { stage: "ANALYZING_SYMBOLS", label: "分析 Symbol 与调用链", percent: 55 },
+  { stage: "INTERPRETING_CHANGES", label: "理解代码变更", percent: 66 },
+  { stage: "EXPLORING_DEPENDENCIES", label: "追踪业务入口", percent: 74 },
+  { stage: "RESOLVING_SCENARIOS", label: "识别业务场景", percent: 82 },
+  { stage: "PLANNING_REGRESSION", label: "生成回归清单", percent: 88 },
   { stage: "SAVING_RESULT", label: "保存分析结果", percent: 90 },
   { stage: "COMPLETED", label: "分析完成", percent: 100 },
 ];

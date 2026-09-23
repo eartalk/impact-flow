@@ -42,7 +42,7 @@ const projects = ref<Project[]>([]);
 const analyses = ref<AnalysisTask[]>([]);
 const loading = ref(false);
 const dialogVisible = ref(false);
-type LogsTab = "CHANGE_ANALYSIS" | "AI_ANALYSIS" | "NOTIFICATION";
+type LogsTab = "CHANGE_ANALYSIS" | "NOTIFICATION";
 
 const LOGS_PAGE_SIZE = 10;
 
@@ -59,7 +59,6 @@ const editingProjectId = ref<string | null>(null);
 const savingProject = ref(false);
 const detectingProjectId = ref<string | null>(null);
 const rerunningProjectId = ref<string | null>(null);
-const startingAiProjectId = ref<string | null>(null);
 const testingConnectionId = ref<string | null>(null);
 const connectionResults = ref<Record<string, RepositoryConnectionTest>>({});
 const detailLoadingProjectId = ref<string | null>(null);
@@ -153,7 +152,6 @@ const pendingNotificationForm = reactive({
 const automationForm = reactive({
   autoInspectionEnabled: true,
   autoChangeAnalysisEnabled: false,
-  autoAiAnalysisEnabled: false,
 });
 
 const memberForm = reactive<CreateWorkspaceMemberInput>({
@@ -282,7 +280,6 @@ function resetWorkspaceScopedState() {
   connectionResults.value = {};
   detectingProjectId.value = null;
   rerunningProjectId.value = null;
-  startingAiProjectId.value = null;
   testingConnectionId.value = null;
   detailLoadingProjectId.value = null;
   inspectionLogs.value = [];
@@ -726,7 +723,6 @@ async function loadAutomationConfig() {
     automationForm.autoInspectionEnabled = config.autoInspectionEnabled;
     automationForm.autoChangeAnalysisEnabled =
       config.autoChangeAnalysisEnabled;
-    automationForm.autoAiAnalysisEnabled = config.autoAiAnalysisEnabled;
   } catch (error) {
     notifyError(error, "操作失败");
   } finally {
@@ -738,22 +734,12 @@ function setAutoInspection(enabled: boolean) {
   automationForm.autoInspectionEnabled = enabled;
   if (!enabled) {
     automationForm.autoChangeAnalysisEnabled = false;
-    automationForm.autoAiAnalysisEnabled = false;
   }
 }
 
 function setAutoChangeAnalysis(enabled: boolean) {
   automationForm.autoChangeAnalysisEnabled = enabled;
   if (enabled) automationForm.autoInspectionEnabled = true;
-  if (!enabled) automationForm.autoAiAnalysisEnabled = false;
-}
-
-function setAutoAiAnalysis(enabled: boolean) {
-  automationForm.autoAiAnalysisEnabled = enabled;
-  if (enabled) {
-    automationForm.autoInspectionEnabled = true;
-    automationForm.autoChangeAnalysisEnabled = true;
-  }
 }
 
 async function saveAutomationConfig() {
@@ -764,7 +750,6 @@ async function saveAutomationConfig() {
     automationForm.autoInspectionEnabled = config.autoInspectionEnabled;
     automationForm.autoChangeAnalysisEnabled =
       config.autoChangeAnalysisEnabled;
-    automationForm.autoAiAnalysisEnabled = config.autoAiAnalysisEnabled;
     ElMessage.success('自动化流程配置已保存');
   } catch (error) {
     notifyError(error, "操作失败");
@@ -852,12 +837,6 @@ const LOGS_STATUS_OPTIONS: Record<LogsTab, Array<{ value: string; label: string 
     { value: "RUNNING", label: "执行中" },
     { value: "READY", label: "等待执行" },
     { value: "NO_CHANGES", label: "无变更" },
-  ],
-  AI_ANALYSIS: [
-    { value: "SUCCESS", label: "成功" },
-    { value: "FAILED", label: "失败" },
-    { value: "RUNNING", label: "执行中" },
-    { value: "DISABLED", label: "未启用" },
   ],
   NOTIFICATION: [
     { value: "SUCCESS", label: "成功" },
@@ -1056,9 +1035,12 @@ function openEditProject(project: Project) {
 async function saveProject() {
   savingProject.value = true;
   try {
+    const payload: CreateProjectInput = {
+      ...form,
+    };
     const project = editingProjectId.value
-      ? await api.updateProject(editingProjectId.value, form)
-      : await api.createProject(form);
+      ? await api.updateProject(editingProjectId.value, payload)
+      : await api.createProject(payload);
     dialogVisible.value = false;
     resetForm();
     await loadData();
@@ -1073,16 +1055,44 @@ async function saveProject() {
 
 async function removeProject(project: Project) {
   try {
-    await ElMessageBox.confirm(
-      `确定删除服务“${project.name}”吗？已有分析记录的服务不会被删除。`,
-      "删除服务",
-      {
-        confirmButtonText: "确认删除",
-        cancelButtonText: "取消",
-        type: "warning",
-      },
-    );
-    await api.deleteProject(project.id);
+    const impact = await api.getProjectDeletionImpact(project.id);
+    if (impact.requiresForce) {
+      const details = [
+        [impact.analysisTaskCount, '次变更分析'],
+        [impact.inspectionLogCount, '条巡检日志'],
+        [impact.notificationDeliveryCount, '条通知记录'],
+      ]
+        .filter(([count]) => Number(count) > 0)
+        .map(([count, label]) => `${count} ${label}`)
+        .join('、');
+      const result = await ElMessageBox.prompt(
+        `将永久删除服务及其关联的 ${details}，此操作不可恢复。请输入服务名称“${project.name}”确认：`,
+        '永久删除服务',
+        {
+          confirmButtonText: '永久删除',
+          cancelButtonText: '取消',
+          type: 'error',
+          inputPlaceholder: project.name,
+          inputValidator: (value) =>
+            value === project.name ? true : `请输入完整服务名称：${project.name}`,
+        },
+      );
+      await api.deleteProject(project.id, {
+        force: true,
+        confirmation: result.value,
+      });
+    } else {
+      await ElMessageBox.confirm(
+        `确定删除服务“${project.name}”吗？此操作不可恢复。`,
+        '删除服务',
+        {
+          confirmButtonText: '确认删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      );
+      await api.deleteProject(project.id);
+    }
     await loadData();
     ElMessage.success("服务已删除");
   } catch (error) {
@@ -1098,10 +1108,6 @@ function analysisFor(projectId: string) {
 function analysisIsActive(projectId: string) {
   const status = analysisFor(projectId)?.status;
   return status === "READY" || status === "RUNNING";
-}
-
-function aiAnalysisIsActive(projectId: string) {
-  return analysisFor(projectId)?.aiAnalysis?.status === "RUNNING";
 }
 
 function analysisStatusLabel(status: AnalysisTask["status"] | undefined) {
@@ -1423,28 +1429,20 @@ async function rerunAnalysis(project: Project) {
   }
 }
 
-async function startAiAnalysis(project: Project) {
-  const task = analysisFor(project.id);
-  if (!task || task.status !== "SUCCESS") return;
-
-  startingAiProjectId.value = project.id;
+async function updateRegressionFeedback(
+  projectId: string,
+  analysisId: string,
+  targetId: string,
+  decision: 'CONFIRMED' | 'EXCLUDED' | 'PENDING',
+) {
   try {
-    const updated = await api.runAiAnalysis(task.id);
-    analysisDetails.value = {
-      ...analysisDetails.value,
-      [project.id]: updated,
-    };
-    analyses.value = analyses.value.map((item) =>
-      item.id === updated.id ? updated : item,
-    );
-    if (!expandedProjectIds.value.includes(project.id)) {
-      expandedProjectIds.value = [...expandedProjectIds.value, project.id];
-    }
-    ElMessage.success(`${project.name} 已提交 AI 分析`);
+    const task = await api.updateRegressionFeedback(analysisId, targetId, { decision });
+    analysisDetails.value = { ...analysisDetails.value, [projectId]: task };
+    analyses.value = analyses.value.map((item) => item.id === task.id ? task : item);
+    if (decision === 'CONFIRMED') ElMessage.success('已确认需要回归');
+    else if (decision === 'EXCLUDED') ElMessage.success('已标记本次无需回归');
   } catch (error) {
-    notifyError(error, "操作失败");
-  } finally {
-    startingAiProjectId.value = null;
+    notifyError(error, '保存回归反馈失败');
   }
 }
 
@@ -1471,9 +1469,7 @@ async function pollActiveAnalyses(force = false) {
   if (
     !force &&
     !analyses.value.some(
-      (task) =>
-        ["READY", "RUNNING"].includes(task.status) ||
-        task.aiAnalysis?.status === "RUNNING",
+      (task) => ["READY", "RUNNING"].includes(task.status),
     )
   ) {
     return;
@@ -1484,7 +1480,7 @@ async function pollActiveAnalyses(force = false) {
     const previous = new Map(
       analyses.value.map((task) => [
         task.id,
-        { status: task.status, aiStatus: task.aiAnalysis?.status },
+        { status: task.status },
       ]),
     );
     const next = await api.listAnalyses();
@@ -1494,8 +1490,7 @@ async function pollActiveAnalyses(force = false) {
     for (const task of next) {
       if (
         expandedProjectIds.value.includes(task.projectId) &&
-        (["READY", "RUNNING"].includes(task.status) ||
-          task.aiAnalysis?.status === "RUNNING")
+        ["READY", "RUNNING"].includes(task.status)
       ) {
         analysisDetails.value = {
           ...analysisDetails.value,
@@ -1509,9 +1504,8 @@ async function pollActiveAnalyses(force = false) {
     const completed = next.filter((task) => {
       const old = previous.get(task.id);
       return (
-        (["READY", "RUNNING"].includes(old?.status ?? "") &&
-          !["READY", "RUNNING"].includes(task.status)) ||
-        (old?.aiStatus === "RUNNING" && task.aiAnalysis?.status !== "RUNNING")
+        ["READY", "RUNNING"].includes(old?.status ?? "") &&
+        !["READY", "RUNNING"].includes(task.status)
       );
     });
     for (const task of completed) {
@@ -1561,7 +1555,6 @@ onBeforeUnmount(() => {
     savingProject,
     detectingProjectId,
     rerunningProjectId,
-    startingAiProjectId,
     testingConnectionId,
     connectionResults,
     detailLoadingProjectId,
@@ -1693,7 +1686,6 @@ onBeforeUnmount(() => {
     loadAutomationConfig,
     setAutoInspection,
     setAutoChangeAnalysis,
-    setAutoAiAnalysis,
     saveAutomationConfig,
     openBaseConfigView,
     openLogsView,
@@ -1718,7 +1710,6 @@ onBeforeUnmount(() => {
     removeProject,
     analysisFor,
     analysisIsActive,
-    aiAnalysisIsActive,
     analysisStatusLabel,
     riskLabel,
     confidenceLabel,
@@ -1747,7 +1738,7 @@ onBeforeUnmount(() => {
     inspectAllProjects,
     startDetection,
     rerunAnalysis,
-    startAiAnalysis,
+    updateRegressionFeedback,
     testProjectConnection,
     pollActiveAnalyses,
     refreshAnalysisStatus,

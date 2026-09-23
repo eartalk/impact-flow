@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { defineAsyncComponent, provide } from "vue";
+import { provide, watch } from "vue";
+import { RouterView, useRoute, useRouter } from "vue-router";
 import {
   Collection,
   DataAnalysis,
@@ -15,24 +16,10 @@ import ProjectDialog from "./components/dialogs/ProjectDialog.vue";
 import AiConfigDialog from "./components/dialogs/AiConfigDialog.vue";
 import WorkspaceSwitcher from "./components/workspace/WorkspaceSwitcher.vue";
 import CreateWorkspaceDialog from "./components/workspace/CreateWorkspaceDialog.vue";
-const WorkspaceSettingsView = defineAsyncComponent(
-  () => import("./views/WorkspaceSettingsView.vue"),
-);
-
-const ReleaseAnalysisView = defineAsyncComponent(
-  () => import("./views/ReleaseAnalysisView.vue"),
-);
-const ServicesView = defineAsyncComponent(
-  () => import("./views/ServicesView.vue"),
-);
-const LogsView = defineAsyncComponent(() => import("./views/LogsView.vue"));
-const MembersView = defineAsyncComponent(() => import("./views/MembersView.vue"));
-const SettingsView = defineAsyncComponent(
-  () => import("./views/SettingsView.vue"),
-);
-
 const workspace = useWorkspaceController();
 provide(WorkspaceContextKey, workspace);
+const route = useRoute();
+const router = useRouter();
 const {
   activeView,
   authLoading,
@@ -59,6 +46,22 @@ const {
   isCurrentWorkspaceArchived,
   submitAuth,
 } = workspace;
+
+const routeNames = new Set([
+  "analysis", "services", "logs", "members", "base-config", "workspace-settings",
+]);
+watch(
+  () => route.name,
+  (name) => {
+    if (typeof name === "string" && routeNames.has(name)) {
+      activeView.value = name as typeof activeView.value;
+    }
+  },
+  { immediate: true },
+);
+watch(activeView, (view) => {
+  if (route.name !== view) void router.replace({ name: view });
+});
 </script>
 
 <template>
@@ -294,12 +297,7 @@ const {
         <span>当前为只读状态。所有者可前往「工作空间设置 → 危险操作」恢复。</span>
         <button @click="openWorkspaceSettings('danger')">去恢复</button>
       </div>
-      <ReleaseAnalysisView v-if="activeView === 'analysis'" />
-      <ServicesView v-else-if="activeView === 'services'" />
-      <LogsView v-else-if="activeView === 'logs'" />
-      <MembersView v-else-if="activeView === 'members'" />
-      <WorkspaceSettingsView v-else-if="activeView === 'workspace-settings'" />
-      <SettingsView v-else />
+      <RouterView />
     </main>
 
     <InspectionLogsDialog />
