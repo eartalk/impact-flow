@@ -132,6 +132,17 @@ AI 在同一次分析中接收冻结后的结构化上下文：
 - 静态候选；
 - 仓库版本快照。
 
+`AiAnalysisBatchPlanner` 不再通过 `slice(0, N)` 丢弃尾部变更。AI 配置中的 `maxFiles` 和 `maxSymbols` 表示单批容量；规划器按高风险文件优先、单批 Diff 字符预算和 Symbol 数量拆分全部业务相关变更。每批独立调用模型，候选最终交给统一场景规划器归并。
+
+每个文件都会写入最终 `regressionPlan.aiCoverage` 覆盖账本；冻结输入上下文保持不可变：
+
+- `FULL_EVIDENCE`：发送了完整受控 Diff；
+- `PARTIAL_EVIDENCE`：发送了被安全预算截断的 Diff；
+- `SUMMARY_ONLY`：没有可发送 Patch，但文件统计和语义摘要已进入批次；
+- `FAILED`：所属 AI 批次失败，由静态分析兜底。
+
+单批失败不阻断其他批次；全部批次失败时才整体降级为纯静态分析。覆盖账本同时记录文件、Symbol、调用链和批次完成数量，不能静默遗漏。
+
 AI 可以：
 
 - 将技术名称转换为清晰业务语言；
@@ -189,6 +200,7 @@ core/
     ├── change-interpreter.ts
     ├── change-relevance.policy.ts
     ├── change-impact.analyzer.ts
+    ├── ai-analysis-batch.planner.ts
     ├── business-impact.resolver.ts
     ├── regression-scenario.merger.ts
     └── regression-planner.ts
@@ -228,6 +240,7 @@ AI 配置仍然保留，它现在是回归分析流水线的可选解释器，�
 | Symbol 分析失败 | 使用文件级 ChangeUnit，unknowns 显示覆盖不足 |
 | AI 未配置 | `generatedBy=STATIC`，正常完成 |
 | AI 调用失败 | 记录警告并使用静态计划，正常完成 |
+| 部分 AI 批次失败 | 保留成功批次，失败文件标记为 `FAILED`，静态候选继续参与最终规划 |
 | 未找到业务边界 | 写入 `unknowns`，不伪造回归范围 |
 | Worker 中断 | 依靠任务租约重新领取 |
 
