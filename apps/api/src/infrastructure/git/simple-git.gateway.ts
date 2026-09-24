@@ -225,9 +225,10 @@ export class SimpleGitGateway implements GitGateway {
     output: string,
     files: ChangedFile[],
   ): ChangeEvidence[] {
-    const maxFiles = 24;
+    // 为分批 AI 分析保留更完整的证据池；超出预算的文件仍会以摘要覆盖。
+    const maxFiles = 500;
     const maxFileCharacters = 5_000;
-    const maxTotalCharacters = 40_000;
+    const maxTotalCharacters = 1_000_000;
     const fileByPath = new Map(
       files.flatMap((file) => [
         [file.path, file] as const,

@@ -52,6 +52,46 @@ export interface ChangeRelevanceSummary {
   decisions: ChangeRelevanceDecision[];
 }
 
+export type AiFileCoverageStatus =
+  | 'FULL_EVIDENCE'
+  | 'PARTIAL_EVIDENCE'
+  | 'SUMMARY_ONLY'
+  | 'FAILED';
+
+export interface AiFileCoverage {
+  filePath: string;
+  status: AiFileCoverageStatus;
+  batchIndexes: number[];
+}
+
+export interface AiBatchCoverage {
+  index: number;
+  status: 'SUCCESS' | 'FAILED';
+  fileCount: number;
+  symbolCount: number;
+  impactCount: number;
+  errorMessage?: string;
+}
+
+export interface AiAnalysisCoverage {
+  strategy: 'BATCHED';
+  complete: boolean;
+  batchCount: number;
+  succeededBatches: number;
+  failedBatches: number;
+  totalFiles: number;
+  fullEvidenceFiles: number;
+  partialEvidenceFiles: number;
+  summaryOnlyFiles: number;
+  failedFiles: number;
+  totalSymbols: number;
+  analyzedSymbols: number;
+  totalImpacts: number;
+  analyzedImpacts: number;
+  files: AiFileCoverage[];
+  batches: AiBatchCoverage[];
+}
+
 /** 一次分析使用的不可变输入版本。历史结果只能使用该快照解释。 */
 export interface AnalysisContextSnapshot {
   baseCommit: string;
@@ -171,6 +211,7 @@ export interface RegressionPlan {
   generatedBy: 'STATIC' | 'STATIC_AND_AI';
   model: string | null;
   generatedAt: string;
+  aiCoverage?: AiAnalysisCoverage;
 }
 
 export interface ChangeEvidence {
@@ -192,6 +233,7 @@ export interface AiAnalysisResult {
   model: string | null;
   analyzedAt: string | null;
   errorMessage: string | null;
+  coverage?: AiAnalysisCoverage;
   tokenUsage?: {
     prompt: number;
     completion: number;

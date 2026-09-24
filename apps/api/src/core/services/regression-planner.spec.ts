@@ -284,4 +284,33 @@ describe('RegressionPlanner', () => {
 
     expect(plan.targets).toHaveLength(2);
   });
+
+  it('exposes failed AI batch files as explicit unknowns while preserving static results', () => {
+    const plan = new RegressionPlanner().plan({
+      summary: '订单提交变化', riskLevel: 'MEDIUM', changeUnits: [],
+      ruleSuggestions: [suggestion()],
+      aiAnalysis: {
+        status: 'SUCCESS', summary: '部分批次完成', riskLevel: 'MEDIUM', keyFindings: [],
+        regressionSuggestions: [], model: 'test-model', analyzedAt: new Date().toISOString(),
+        errorMessage: '1 个批次失败',
+        coverage: {
+          strategy: 'BATCHED', complete: false, batchCount: 2, succeededBatches: 1, failedBatches: 1,
+          totalFiles: 2, fullEvidenceFiles: 1, partialEvidenceFiles: 0, summaryOnlyFiles: 0, failedFiles: 1,
+          totalSymbols: 0, analyzedSymbols: 0, totalImpacts: 0, analyzedImpacts: 0,
+          files: [
+            { filePath: 'src/order.controller.ts', status: 'FULL_EVIDENCE', batchIndexes: [1] },
+            { filePath: 'src/order.service.ts', status: 'FAILED', batchIndexes: [2] },
+          ],
+          batches: [
+            { index: 1, status: 'SUCCESS', fileCount: 1, symbolCount: 0, impactCount: 0 },
+            { index: 2, status: 'FAILED', fileCount: 1, symbolCount: 0, impactCount: 0 },
+          ],
+        },
+      },
+    });
+
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.unknowns).toContain('src/order.service.ts：AI 批次分析失败，当前结论仅由静态分析兜底');
+    expect(plan.aiCoverage?.complete).toBe(false);
+  });
 });

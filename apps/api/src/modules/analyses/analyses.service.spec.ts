@@ -164,7 +164,18 @@ describe('AnalysesService', () => {
       changeEvidence: files.map((file) => ({ filePath: file.path, oldPath: null, hunks: [] })),
     }) };
     const symbols = symbolResult();
-    const ai = { analyze: jest.fn().mockResolvedValue({ status: 'DISABLED' }) };
+    const aiCoverage = {
+      strategy: 'BATCHED', complete: true, batchCount: 1, succeededBatches: 1, failedBatches: 0,
+      totalFiles: 1, fullEvidenceFiles: 1, partialEvidenceFiles: 0, summaryOnlyFiles: 0, failedFiles: 0,
+      totalSymbols: 0, analyzedSymbols: 0, totalImpacts: 0, analyzedImpacts: 0,
+      files: [{ filePath: 'src/order.service.ts', status: 'FULL_EVIDENCE', batchIndexes: [1] }],
+      batches: [{ index: 1, status: 'SUCCESS', fileCount: 1, symbolCount: 0, impactCount: 0 }],
+    };
+    const ai = { analyze: jest.fn().mockResolvedValue({
+      status: 'SUCCESS', summary: '订单服务完成 AI 分析', riskLevel: 'LOW', keyFindings: [],
+      regressionSuggestions: [], model: 'test-model', analyzedAt: new Date().toISOString(),
+      errorMessage: null, coverage: aiCoverage,
+    }) };
     const service = createService({ analyses, projects, git, symbols, ai });
 
     await (service as unknown as { process(id: string): Promise<void> }).process(source.id);
@@ -182,6 +193,7 @@ describe('AnalysesService', () => {
       source.id,
       expect.objectContaining({
         files,
+        regressionPlan: expect.objectContaining({ aiCoverage }),
         analysisContext: expect.objectContaining({
           relevance: expect.objectContaining({
             businessRelevant: 1, technicalValidation: 1, ignored: 1,

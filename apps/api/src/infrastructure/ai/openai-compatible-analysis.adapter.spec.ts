@@ -194,6 +194,67 @@ describe('OpenAiCompatibleAnalysisAdapter', () => {
       }),
     );
   });
+
+  it('analyzes every file in separate batches and records evidence coverage', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({
+          summary: '批次完成', riskLevel: 'MEDIUM', keyFindings: [], regressionSuggestions: [],
+        }) } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }),
+    } as unknown as Response));
+    const value = input();
+    value.files = [
+      { path: 'src/full.ts', oldPath: null, changeType: 'M', additions: 1, deletions: 0 },
+      { path: 'src/partial.ts', oldPath: null, changeType: 'M', additions: 2, deletions: 0 },
+      { path: 'src/summary.ts', oldPath: null, changeType: 'M', additions: 3, deletions: 0 },
+    ];
+    value.changeEvidence = [
+      { filePath: 'src/full.ts', oldPath: null, changeType: 'M', patch: '@@\n+full', truncated: false },
+      { filePath: 'src/partial.ts', oldPath: null, changeType: 'M', patch: '@@\n+partial', truncated: true },
+    ];
+
+    const result = await createAdapter({ maxFiles: 1 }).analyze(value);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(result.coverage).toEqual(expect.objectContaining({
+      strategy: 'BATCHED', complete: true, batchCount: 3, succeededBatches: 3,
+      totalFiles: 3, fullEvidenceFiles: 1, partialEvidenceFiles: 1, summaryOnlyFiles: 1,
+    }));
+    expect(result.tokenUsage).toEqual({ prompt: 30, completion: 15, total: 45 });
+    const requests = fetchSpy.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(requests.map((request) => JSON.parse(request.messages[1].content).batchContext.index))
+      .toEqual([1, 2, 3]);
+  });
+
+  it('continues remaining batches and marks failed coverage when one model call fails', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch')
+      .mockRejectedValueOnce(new Error('temporary timeout'))
+      .mockImplementation(async () => ({
+        ok: true, status: 200,
+        json: async () => ({ choices: [{ message: { content: JSON.stringify({
+          summary: '其余批次完成', riskLevel: 'LOW', keyFindings: [], regressionSuggestions: [],
+        }) } }] }),
+      } as unknown as Response));
+    const value = input();
+    value.files = [
+      { path: 'src/a.ts', oldPath: null, changeType: 'M', additions: 1, deletions: 0 },
+      { path: 'src/b.ts', oldPath: null, changeType: 'M', additions: 1, deletions: 0 },
+    ];
+    value.changeEvidence = [];
+
+    const result = await createAdapter({ maxFiles: 1 }).analyze(value);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(result.status).toBe('SUCCESS');
+    expect(result.errorMessage).toContain('1 个 AI 分析批次失败');
+    expect(result.coverage).toEqual(expect.objectContaining({
+      complete: false, failedBatches: 1, failedFiles: 1, summaryOnlyFiles: 1,
+    }));
+  });
 });
 
 function createAdapter(
@@ -201,6 +262,8 @@ function createAdapter(
     baseUrl?: string;
     apiFormat?: 'OPENAI' | 'ANTHROPIC';
     enabled?: boolean;
+    maxFiles?: number;
+    maxSymbols?: number;
   } | null = {},
 ) {
   const repository = {
@@ -215,8 +278,8 @@ function createAdapter(
       enabled: savedOverrides.enabled ?? true,
       isDefault: true,
       timeoutMs: 30000,
-      maxFiles: 80,
-      maxSymbols: 50,
+      maxFiles: savedOverrides.maxFiles ?? 80,
+      maxSymbols: savedOverrides.maxSymbols ?? 50,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     } : null),

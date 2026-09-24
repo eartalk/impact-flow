@@ -95,6 +95,26 @@ describe('SimpleGitGateway change evidence', () => {
 
     expect(parseEvidence(gateway, patch, files)).toEqual([]);
   });
+
+  it('keeps evidence beyond the former 24-file limit for downstream batching', () => {
+    const gateway = new SimpleGitGateway(new ConfigService({}));
+    const files: ChangedFile[] = Array.from({ length: 30 }, (_, index) => ({
+      path: `src/file-${index}.ts`, oldPath: null, changeType: 'M', additions: 1, deletions: 0,
+    }));
+    const patch = files.map((file) => [
+      `diff --git a/${file.path} b/${file.path}`,
+      `--- a/${file.path}`,
+      `+++ b/${file.path}`,
+      '@@ -1 +1 @@',
+      `-export const value = 0;`,
+      `+export const value = 1;`,
+    ].join('\n')).join('\n');
+
+    const result = parseEvidence(gateway, patch, files);
+
+    expect(result).toHaveLength(30);
+    expect(result.at(-1)?.filePath).toBe('src/file-29.ts');
+  });
 });
 
 function parseEvidence(

@@ -44,6 +44,9 @@ export class RegressionPlanner {
         .filter((target) => target.coverageStatus === 'NEEDS_REVIEW' || target.confidence === 'LOW')
         .map((target) => `${target.title}：证据不足，需要人工确认业务入口`),
       ...uncovered.map((unit) => `${unit.title}：尚未追踪到可靠业务边界`),
+      ...(input.aiAnalysis?.coverage?.files ?? [])
+        .filter((file) => file.status === 'FAILED')
+        .map((file) => `${file.filePath}：AI 批次分析失败，当前结论仅由静态分析兜底`),
     ].slice(0, 20);
 
     return {
@@ -57,6 +60,7 @@ export class RegressionPlanner {
       generatedBy: input.aiAnalysis?.status === 'SUCCESS' ? 'STATIC_AND_AI' : 'STATIC',
       model: input.aiAnalysis?.status === 'SUCCESS' ? input.aiAnalysis.model : null,
       generatedAt: new Date().toISOString(),
+      aiCoverage: input.aiAnalysis?.coverage,
     };
   }
 
