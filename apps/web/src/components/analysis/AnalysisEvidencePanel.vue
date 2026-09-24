@@ -8,6 +8,13 @@ const relevanceLabel = {
   IGNORED: "已忽略",
   NEEDS_REVIEW: "待确认",
 } as const;
+
+const coverageLabel = {
+  FULL_EVIDENCE: "完整证据",
+  PARTIAL_EVIDENCE: "部分证据",
+  SUMMARY_ONLY: "摘要覆盖",
+  FAILED: "分析失败",
+} as const;
 </script>
 
 <template>
@@ -63,6 +70,68 @@ const relevanceLabel = {
             <b>{{ relevanceLabel[decision.classification] }}</b>
             <code>{{ decision.filePath }}</code>
             <span>{{ decision.reason }}</span>
+          </article>
+        </div>
+      </section>
+
+      <section
+        v-if="task.regressionPlan?.aiCoverage"
+        class="ai-coverage-evidence"
+      >
+        <div class="coverage-heading">
+          <div>
+            <strong>AI 分批覆盖账本</strong>
+            <small>
+              {{ task.regressionPlan.aiCoverage.succeededBatches }}/{{
+                task.regressionPlan.aiCoverage.batchCount
+              }}
+              批完成
+            </small>
+          </div>
+          <b :data-complete="task.regressionPlan.aiCoverage.complete">
+            {{
+              task.regressionPlan.aiCoverage.complete
+                ? "覆盖完整"
+                : "存在缺口"
+            }}
+          </b>
+        </div>
+        <div class="coverage-stats">
+          <span
+            >{{ task.regressionPlan.aiCoverage.fullEvidenceFiles }}
+            完整证据</span
+          >
+          <span
+            >{{ task.regressionPlan.aiCoverage.partialEvidenceFiles }}
+            部分证据</span
+          >
+          <span
+            >{{ task.regressionPlan.aiCoverage.summaryOnlyFiles }}
+            摘要覆盖</span
+          >
+          <span :class="{ danger: task.regressionPlan.aiCoverage.failedFiles }">
+            {{ task.regressionPlan.aiCoverage.failedFiles }} 失败
+          </span>
+          <span>
+            Symbol {{ task.regressionPlan.aiCoverage.analyzedSymbols }}/{{
+              task.regressionPlan.aiCoverage.totalSymbols
+            }}
+          </span>
+          <span>
+            调用链 {{ task.regressionPlan.aiCoverage.analyzedImpacts }}/{{
+              task.regressionPlan.aiCoverage.totalImpacts
+            }}
+          </span>
+        </div>
+        <div class="coverage-list">
+          <article
+            v-for="file in task.regressionPlan.aiCoverage.files"
+            :key="file.filePath"
+            :data-status="file.status"
+          >
+            <b>{{ coverageLabel[file.status] }}</b>
+            <code>{{ file.filePath }}</code>
+            <small>批次 {{ file.batchIndexes.join(", ") }}</small>
           </article>
         </div>
       </section>
@@ -288,6 +357,90 @@ const relevanceLabel = {
   font-size: 8px;
   line-height: 1.45;
 }
+.evidence-content .ai-coverage-evidence {
+  grid-column: 1/-1;
+  padding: 12px 0 2px;
+  border-top: 1px solid #e0e6ec;
+  border-left: 0;
+}
+.coverage-heading,
+.coverage-heading > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+.coverage-heading strong {
+  color: #526477;
+  font-size: 10px;
+}
+.coverage-heading small {
+  color: #8d99a5;
+  font-size: 8px;
+}
+.coverage-heading > b {
+  padding: 3px 7px;
+  border: 1px solid #c9ded5;
+  background: #f1f8f5;
+  color: #3f735f;
+  font-size: 8px;
+}
+.coverage-heading > b[data-complete="false"] {
+  border-color: #e5c7bf;
+  background: #fff5f2;
+  color: #a45849;
+}
+.coverage-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.coverage-stats span {
+  padding: 3px 7px;
+  border: 1px solid #dce4ea;
+  background: #fff;
+  color: #617284;
+  font-size: 8px;
+}
+.coverage-stats .danger {
+  border-color: #e4c1ba;
+  color: #a65345;
+}
+.coverage-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 12px;
+  max-height: 180px;
+  overflow: auto;
+}
+.coverage-list article {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 5px 7px;
+  border: 1px solid #e4e9ed;
+  border-left: 2px solid #6e9d88;
+  background: #fff;
+}
+.coverage-list article[data-status="PARTIAL_EVIDENCE"] {
+  border-left-color: #c09b54;
+}
+.coverage-list article[data-status="SUMMARY_ONLY"] {
+  border-left-color: #93a2af;
+}
+.coverage-list article[data-status="FAILED"] {
+  border-left-color: #bb6758;
+}
+.coverage-list article b,
+.coverage-list article small {
+  font-size: 8px;
+}
+.coverage-list article small {
+  color: #8995a1;
+}
 .semantic-list {
   max-height: 340px;
   padding-right: 6px;
@@ -346,6 +499,9 @@ const relevanceLabel = {
     border-top: 1px solid #e0e6ec;
   }
   .relevance-list {
+    grid-template-columns: 1fr;
+  }
+  .coverage-list {
     grid-template-columns: 1fr;
   }
   .relevance-list article {

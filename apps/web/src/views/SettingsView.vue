@@ -87,10 +87,10 @@ const { loading, aiConfigs, aiConfigLoading, testingAiConfigId, aiConnectionResu
                       >{{ config.timeoutMs / 1000 }}s</span
                     >
                     <span class="ai-config-limit"
-                      >{{ config.maxFiles }} 文件</span
+                      >每批 {{ config.maxFiles }} 文件</span
                     >
                     <span class="ai-config-limit"
-                      >{{ config.maxSymbols }} Symbol</span
+                      >每批 {{ config.maxSymbols }} Symbol</span
                     >
                   </div>
                   <div class="ai-config-setting-item status">

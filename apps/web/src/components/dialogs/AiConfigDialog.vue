@@ -62,10 +62,10 @@ const { aiConfigDialogVisible, editingAiConfigId, savingAiConfig, form, aiForm, 
               :step="1000"
             />
           </el-form-item>
-          <el-form-item label="最多文件数">
+          <el-form-item label="单批最多文件数">
             <el-input-number v-model="aiForm.maxFiles" :min="1" :max="500" />
           </el-form-item>
-          <el-form-item label="最多 Symbol 数">
+          <el-form-item label="单批最多 Symbol 数">
             <el-input-number v-model="aiForm.maxSymbols" :min="1" :max="500" />
           </el-form-item>
         </div>
